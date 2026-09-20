@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useState, type FormEvent, type ReactNode } from 'react';
 import type { ProjectInput } from '../db/repositories/projects';
 
 const empty: ProjectInput = {
@@ -11,9 +11,10 @@ interface Props {
   submitLabel: string;
   onSubmit: (input: ProjectInput) => Promise<void>;
   onCancel: () => void;
+  children?: ReactNode;
 }
 
-export function ProjectForm({ initial, title, submitLabel, onSubmit, onCancel }: Props) {
+export function ProjectForm({ initial, title, submitLabel, onSubmit, onCancel, children }: Props) {
   const [value, setValue] = useState<ProjectInput>(initial ?? empty);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -51,6 +52,7 @@ export function ProjectForm({ initial, title, submitLabel, onSubmit, onCancel }:
             <label>开始日期 <input type="date" value={value.startDate} onChange={event => set('startDate', event.target.value)} required /></label>
             <label>结束日期 <input type="date" value={value.endDate} onChange={event => set('endDate', event.target.value)} required /></label>
           </div>
+          {children}
           {error && <p role="alert" className="error">{error}</p>}
           <div className="dialog-actions">
             <button type="button" className="button secondary" onClick={onCancel}>取消</button>

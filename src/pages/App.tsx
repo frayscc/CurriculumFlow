@@ -11,6 +11,7 @@ import { PlanPage } from './PlanPage';
 import { ExecutionPage } from './ExecutionPage';
 import { ExamPage } from './ExamPage';
 import { ArchivePage } from './ArchivePage';
+import { copyHistoricalProject, defaultCopyOptions, type CopyOptions } from '../db/repositories/history';
 
 function projectTitle(project: SemesterProject) {
   return `${project.schoolYear}学年 · ${project.grade}${project.subject} · ${project.semester}`;
@@ -19,12 +20,15 @@ function projectTitle(project: SemesterProject) {
 function Home() {
   const projects = useLiveQuery(() => db.projects.orderBy('updatedAt').reverse().toArray());
   const [creating, setCreating] = useState(false);
+  const [copying, setCopying] = useState(false);
+  const [sourceProjectId, setSourceProjectId] = useState('');
+  const [copyOptions, setCopyOptions] = useState<CopyOptions>(defaultCopyOptions);
   const navigate = useNavigate();
   return (
     <main className="workspace">
       <div className="page-heading">
         <div><p className="eyebrow">工作空间</p><h1>学期项目</h1><p className="muted">教学计划、执行记录和考试资源，保存在这台设备上。</p></div>
-        <button className="button primary" onClick={() => setCreating(true)}>＋ 新建项目</button>
+        <div className="header-actions">{projects && projects.length > 0 && <button className="button secondary" onClick={() => { setSourceProjectId(projects[0].id); setCopying(true); }}>基于往届创建</button>}<button className="button primary" onClick={() => setCreating(true)}>＋ 新建项目</button></div>
       </div>
       {projects === undefined ? <p>正在读取本地项目…</p> : projects.length === 0 ? (
         <div className="empty-state"><h2>还没有学期项目</h2><p>从新建项目开始，设置学年、年级、学科和日期。</p><button className="button primary" onClick={() => setCreating(true)}>新建第一个项目</button></div>
@@ -40,6 +44,14 @@ function Home() {
       {creating && <ProjectForm title="新建学期项目" submitLabel="创建项目" onCancel={() => setCreating(false)} onSubmit={async input => {
         const project = await createProject(input); setCreating(false); navigate(`/projects/${project.id}`);
       }} />}
+      {copying && projects && <ProjectForm title="基于往届创建" submitLabel="创建并复制经验" onCancel={() => setCopying(false)} onSubmit={async input => {
+        const project = await copyHistoricalProject(sourceProjectId, input, copyOptions);
+        setCopying(false); navigate(`/projects/${project.id}`);
+      }}><div className="copy-options"><label>参考项目 <select value={sourceProjectId} onChange={event => setSourceProjectId(event.target.value)}>{projects.map(project => <option key={project.id} value={project.id}>{projectTitle(project)}</option>)}</select></label><div className="copy-checks">{([
+        ['tasks', '教学任务与顺序'], ['plannedPeriods', '预计课时'], ['examNodes', '考试节点'], ['selfStudy', '自主复习安排'],
+        ['courseSchedule', '周课表'], ['calendar', '校历（按学期第几天映射，需核对）'],
+        ['authors', '命题人'], ['reviewers', '审题人'],
+      ] as Array<[keyof CopyOptions, string]>).map(([key, label]) => <label key={key} className="checkbox-label"><input type="checkbox" checked={copyOptions[key]} onChange={event => setCopyOptions(previous => ({ ...previous, [key]: event.target.checked }))} />{label}</label>)}</div><p>实际教学记录与上一届日期不复制；新项目建立后可在任务编辑中查看往届实际课时。</p></div></ProjectForm>}
     </main>
   );
 }

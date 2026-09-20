@@ -6,6 +6,7 @@ import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalList
 import { CSS } from '@dnd-kit/utilities';
 import { createTask, deleteTask, reorderTasks, restoreDeletedTask, updateTask, type TaskInput } from '../db/repositories/tasks';
 import { db } from '../db/schema';
+import { getHistoricalReference } from '../db/repositories/history';
 import type { TeachingTask } from '../types/domain';
 
 const labels: Record<TeachingTask['type'], string> = {
@@ -20,6 +21,7 @@ function TaskEditor({ task, projectId, onClose, onPeriodChange }: {
 }) {
   const [input, setInput] = useState<TaskInput>(task ?? empty);
   const exams = useLiveQuery(() => db.exams.where('projectId').equals(projectId).toArray(), [projectId]) ?? [];
+  const historical = useLiveQuery(() => task ? getHistoricalReference(task) : undefined, [task?.id]);
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState('');
   const [fixedMode, setFixedMode] = useState<'none' | 'date' | 'week'>(task?.fixedDate ? 'date' : task?.fixedWeek ? 'week' : 'none');
@@ -44,6 +46,7 @@ function TaskEditor({ task, projectId, onClose, onPeriodChange }: {
     <label className="checkbox-label"><input type="checkbox" checked={input.allowSplit} onChange={event => set('allowSplit', event.target.checked)} />允许跨日期拆分课时</label>
     <label>关联考试资源 <select value={input.examId ?? ''} onChange={event => set('examId', event.target.value || undefined)}><option value="">不关联</option>{exams.map(exam => <option key={exam.id} value={exam.id}>{exam.title}</option>)}</select></label>
     <label>备注 <input value={input.note ?? ''} onChange={event => set('note', event.target.value)} placeholder="可选" /></label>
+    {historical && <div className="historical-tip"><strong>往届参考 · {historical.sourceProject.schoolYear}</strong><span>计划 {historical.sourceTask.plannedPeriods} 课时{historical.actualPeriods !== undefined ? ` · 实际 ${historical.actualPeriods} 课时` : ' · 暂无实际课时记录'}</span>{historical.reason && <span>原因：{historical.reason}</span>}{historical.actualPeriods !== undefined && historical.actualPeriods > 0 && <button type="button" className="text-button" onClick={() => set('plannedPeriods', Math.ceil(historical.actualPeriods!))}>采用往届实际课时</button>}</div>}
     {formError && <p className="error" role="alert">{formError}</p>}
     <div className="dialog-actions"><button className="button secondary" type="button" onClick={onClose}>取消</button><button className="button primary" type="submit" disabled={busy}>{busy ? '保存中…' : task ? '保存修改' : '添加任务'}</button></div>
   </form></section></div>;

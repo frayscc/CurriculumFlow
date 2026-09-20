@@ -4,7 +4,7 @@ import { db as appDb, type CurriculumDatabase } from '../schema';
 
 export type ProjectInput = Pick<SemesterProject, 'schoolYear' | 'grade' | 'subject' | 'semester' | 'startDate' | 'endDate'>;
 
-function normalize(input: ProjectInput): ProjectInput {
+export function validateProjectInput(input: ProjectInput): ProjectInput {
   const clean = {
     schoolYear: input.schoolYear.trim(), grade: input.grade.trim(),
     subject: input.subject.trim(), semester: input.semester.trim(),
@@ -26,7 +26,7 @@ async function ensureUnique(input: ProjectInput, database: CurriculumDatabase, e
 }
 
 export async function createProject(input: ProjectInput, database = appDb): Promise<SemesterProject> {
-  const data = normalize(input);
+  const data = validateProjectInput(input);
   const id = crypto.randomUUID();
   const calendarDays = generateCalendarDays(id, data.startDate, data.endDate);
   const now = new Date().toISOString();
@@ -40,7 +40,7 @@ export async function createProject(input: ProjectInput, database = appDb): Prom
 }
 
 export async function updateProject(id: string, input: ProjectInput, database = appDb): Promise<SemesterProject> {
-  const data = normalize(input);
+  const data = validateProjectInput(input);
   return database.transaction('rw', database.projects, database.calendarDays, database.scheduleOverrides, async () => {
     const original = await database.projects.get(id);
     if (!original) throw new Error('项目不存在或已删除。');
