@@ -56,7 +56,7 @@ function makeLessons(task: TeachingTask, indices: number[], slots: TeachingSlot[
   }));
 }
 
-function makeWeeks(project: SchedulerInput['project'], lessons: DraftLesson[]): ScheduledWeek[] {
+export function buildScheduledWeeks(project: SchedulerInput['project'], lessons: DraftLesson[]): ScheduledWeek[] {
   const start = parseLocalDate(project.startDate);
   const firstSunday = start - new Date(start).getUTCDay() * 86_400_000;
   const weekCount = teachingWeekNumber(project.startDate, project.endDate);
@@ -168,5 +168,5 @@ export function schedule(input: SchedulerInput): ScheduleResult {
   }
   const lessons = tasks.flatMap(task => makeLessons(task, assignments.get(task.id) ?? [], slots));
   lessons.sort((a, b) => a.date.localeCompare(b.date) || a.period - b.period || a.taskId.localeCompare(b.taskId));
-  return { slots, lessons, weeks: makeWeeks(project, lessons), unscheduled, conflicts };
+  return { slots, lessons, weeks: buildScheduledWeeks(project, lessons), unscheduled, conflicts };
 }

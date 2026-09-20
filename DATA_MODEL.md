@@ -67,6 +67,7 @@ interface PlanVersion {
 interface ScheduledLessonSnapshot {
   id: ID; taskId: ID; date: LocalDate; weekNumber: number;
   period: number; taskPeriodIndex: number; plannedPeriods: number;
+  taskTitle: string; taskType: TaskType; // 历史标题与类型快照
 }
 interface ScheduledLesson extends ScheduledLessonSnapshot {
   projectId: ID; planVersionId: ID;

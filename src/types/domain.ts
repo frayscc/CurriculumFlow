@@ -26,7 +26,7 @@ export interface TeachingTask {
 }
 export interface ScheduledLessonSnapshot {
   id: ID; taskId: ID; date: LocalDate; weekNumber: number; period: number;
-  taskPeriodIndex: number; plannedPeriods: number;
+  taskPeriodIndex: number; plannedPeriods: number; taskTitle: string; taskType: TaskType;
 }
 export interface PlanVersion {
   id: ID; projectId: ID; version: number; createdAt: Timestamp; reason: string;
