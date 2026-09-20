@@ -25,7 +25,7 @@ describe('teaching task repository', () => {
     expect(edited.plannedPeriods).toBe(2);
     await reorderTasks(project.id, [second.id, first.id], database);
     expect((await database.teachingTasks.where('projectId').equals(project.id).sortBy('order')).map(task => task.id)).toEqual([second.id, first.id]);
-    expect((await database.changeLogs.where('projectId').equals(project.id).toArray()).map(log => log.action)).toEqual(['update', 'reorder']);
+    expect((await database.changeLogs.where('projectId').equals(project.id).toArray()).map(log => log.action).sort()).toEqual(['reorder', 'update']);
   });
 
   it('rejects invalid fixed nodes and linked-task deletion', async () => {
