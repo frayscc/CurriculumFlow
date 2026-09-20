@@ -1,3 +1,3 @@
-// Schema version 1 is declared in schema.ts. Future upgrades belong here as
-// Dexie version(n).stores(...).upgrade(...) steps. Existing data is never reset.
-export const CURRENT_SCHEMA_VERSION = 1;
+// Version declarations live in schema.ts beside the table indexes. Each new
+// version extends the previous one without clearing existing project data.
+export const CURRENT_SCHEMA_VERSION = 2;

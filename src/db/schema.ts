@@ -45,6 +45,11 @@ export class CurriculumDatabase extends Dexie {
       teachers: 'id, name',
       settings: 'key, projectId',
     });
+    // Add a direct project index for execution views. Dexie upgrades existing
+    // v1 databases in place; no records or attachments are cleared.
+    this.version(2).stores({
+      actualRecords: 'id, projectId, [projectId+scheduledLessonId], [projectId+taskId], [projectId+actualDate]',
+    });
   }
 }
 
