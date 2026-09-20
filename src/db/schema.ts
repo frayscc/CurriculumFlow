@@ -50,6 +50,15 @@ export class CurriculumDatabase extends Dexie {
     this.version(2).stores({
       actualRecords: 'id, projectId, [projectId+scheduledLessonId], [projectId+taskId], [projectId+actualDate]',
     });
+    // Several views and project deletion query by projectId directly. Make
+    // those indexes explicit so existing v1/v2 databases migrate safely.
+    this.version(3).stores({
+      planVersions: 'id, projectId, [projectId+version], [projectId+createdAt]',
+      scheduledLessons: 'id, projectId, [projectId+planVersionId+date], [projectId+taskId], planVersionId',
+      planAnnotations: 'id, projectId, [projectId+startDate], [projectId+endDate], kind',
+      specialDuties: 'id, projectId, [projectId+startDate], [projectId+endDate], teacherId',
+      exams: 'id, projectId, [projectId+examDate], [projectId+examType], title',
+    });
   }
 }
 
