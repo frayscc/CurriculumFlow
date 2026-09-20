@@ -14,6 +14,7 @@ import { ArchivePage } from './ArchivePage';
 import { ExportPage } from './ExportPage';
 import { BackupPage } from './BackupPage';
 import { copyHistoricalProject, defaultCopyOptions, type CopyOptions } from '../db/repositories/history';
+import { readProjectDashboard } from '../db/repositories/dashboard';
 
 function projectTitle(project: SemesterProject) {
   return `${project.schoolYear}学年 · ${project.grade}${project.subject} · ${project.semester}`;
@@ -64,6 +65,9 @@ function ProjectPage() {
   const dayCount = useLiveQuery(() => db.calendarDays.where('projectId').equals(projectId).count(), [projectId]);
   const taskCount = useLiveQuery(() => db.teachingTasks.where('projectId').equals(projectId).count(), [projectId]);
   const versionCount = useLiveQuery(() => db.planVersions.where('projectId').equals(projectId).count(), [projectId]);
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const dashboard = useLiveQuery(() => readProjectDashboard(projectId, today), [projectId, today]);
   const [editing, setEditing] = useState(false);
   const [error, setError] = useState('');
   const navigate = useNavigate();
@@ -88,9 +92,10 @@ function ProjectPage() {
       {error && <p role="alert" className="error">{error}</p>}
       <section className="overview-grid">
         <div className="stat-panel"><span>校历日期</span><strong>{dayCount ?? '…'}</strong><small>覆盖整个学期，每天一条记录</small></div>
-        <div className="stat-panel"><span>教学任务</span><strong>{taskCount ?? '…'}</strong><small>后续阶段从任务队列录入</small></div>
+        <div className="stat-panel"><span>教学任务</span><strong>{taskCount ?? '…'}</strong><small>按顺序安排教学内容</small></div>
         <div className="stat-panel"><span>计划版本</span><strong>{versionCount ?? '…'}</strong><small>排课确认后保留历史版本</small></div>
       </section>
+      {dashboard && <section className="section-panel"><div className="execution-toolbar"><h2>教学概览</h2><span>当前：{today < project.startDate ? '学期尚未开始' : today > project.endDate ? '学期已结束' : `第 ${dashboard.currentWeek} 周`}</span></div><div className="overview-grid"><div className="stat-panel"><span>计划进度</span><strong>{dashboard.totalLessons ? Math.round(dashboard.plannedDue / dashboard.totalLessons * 100) : 0}%</strong><small>截至今日 {dashboard.plannedDue} / {dashboard.totalLessons} 课时</small></div><div className="stat-panel"><span>实际进度</span><strong>{dashboard.totalLessons ? Math.round(dashboard.completed / dashboard.totalLessons * 100) : 0}%</strong><small>已完成 {dashboard.completed} / {dashboard.totalLessons} 课时</small></div><div className="stat-panel"><span>进度差异</span><strong>{dashboard.lagPeriods ? `落后 ${dashboard.lagPeriods} 课时` : '按计划'}</strong><small>按截至今日的计划课次比较</small></div></div><div className="dashboard-details"><div><h3>本周教学</h3>{dashboard.thisWeek.length ? <ul>{dashboard.thisWeek.map(lesson => <li key={lesson.id}>{lesson.date} 第{lesson.period}节 · {lesson.taskTitle}</li>)}</ul> : <p className="muted">本周尚无已排课次。</p>}</div><div><h3>下一次考试</h3>{dashboard.nextExam ? <p>{dashboard.nextExam.title} · {dashboard.nextExam.examDate}</p> : <p className="muted">暂无即将到来的考试。</p>}</div></div></section>}
       <section className="section-panel feature-link-panel"><div><h2>校历与课表</h2><p>设置节假日、调休日、每周学科课和指定日期调整。</p></div><Link className="button primary" to={`/projects/${project.id}/calendar`}>打开校历与课表 →</Link></section>
       <section className="section-panel feature-link-panel"><div><h2>教学任务队列</h2><p>按顺序维护新课、练习、检测、考试和复习任务。</p></div><Link className="button primary" to={`/projects/${project.id}/tasks`}>打开任务队列 →</Link></section>
       <section className="section-panel feature-link-panel"><div><h2>教学计划</h2><p>生成排课草案，查看周计划和日历，并保留计划版本。</p></div><Link className="button primary" to={`/projects/${project.id}/plan`}>打开教学计划 →</Link></section>
@@ -98,6 +103,7 @@ function ProjectPage() {
       <section className="section-panel feature-link-panel"><div><h2>考试资源</h2><p>管理命题人、审题人和试卷、答题卡、答案等附件。</p></div><Link className="button primary" to={`/projects/${project.id}/exams`}>打开考试资源 →</Link></section>
       <section className="section-panel feature-link-panel"><div><h2>工作计划导出</h2><p>按现有备课组工作计划版式预览并导出 XLSX。</p></div><Link className="button primary" to={`/projects/${project.id}/export`}>预览工作计划 →</Link></section>
       <section className="section-panel feature-link-panel"><div><h2>完整备份</h2><p>导出项目及所有考试附件；恢复时校验完整性。</p></div><Link className="button primary" to={`/projects/${project.id}/backup`}>备份或恢复 →</Link></section>
+      {dashboard && <section className="section-panel"><h2>本地容量</h2><p>结构化数据约 {(dashboard.structuredBytes / 1048576).toFixed(2)} MB · 考试附件 {dashboard.attachmentCount} 个，约 {(dashboard.attachmentBytes / 1048576).toFixed(2)} MB · 合计约 {((dashboard.structuredBytes + dashboard.attachmentBytes) / 1048576).toFixed(2)} MB</p><p className="muted">这是当前项目数据量估算，不含浏览器索引和缓存开销。建议定期导出完整备份。</p></section>}
       <section className="section-panel"><h2>项目基础信息</h2><dl className="detail-grid"><dt>学年</dt><dd>{project.schoolYear}</dd><dt>年级</dt><dd>{project.grade}</dd><dt>学科</dt><dd>{project.subject}</dd><dt>学期</dt><dd>{project.semester}</dd><dt>创建时间</dt><dd>{new Date(project.createdAt).toLocaleString('zh-CN')}</dd><dt>保存状态</dt><dd>已自动保存到本机</dd></dl></section>
       {editing && <ProjectForm title="编辑项目信息" submitLabel="保存修改" initial={project} onCancel={() => setEditing(false)} onSubmit={async input => { await updateProject(project.id, input); setEditing(false); }} />}
     </main>

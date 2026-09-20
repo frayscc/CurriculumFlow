@@ -12,6 +12,7 @@ import { exportProjectBackup, prepareProjectBackup, restoreProjectBackup } from 
 import { buildWorkPlanView } from '../core/excel/planView';
 import { buildWorkPlanXlsx } from '../core/excel/workbook';
 import { buildExamPackage } from '../core/files/examPackage';
+import { readProjectDashboard } from '../db/repositories/dashboard';
 import { CurriculumDatabase } from '../db/schema';
 
 let database: CurriculumDatabase;
@@ -47,6 +48,10 @@ describe('V1 physics workflow', () => {
     const examZip = await buildExamPackage(project, exam, payloads);
     const archive = await JSZip.loadAsync(await examZip.blob.arrayBuffer());
     expect(Object.keys(archive.files).filter(path => path.endsWith('.pdf'))).toHaveLength(2);
+    const dashboard = (await readProjectDashboard(project.id, '2026-09-20', database))!;
+    expect(dashboard.completed).toBe(1);
+    expect(dashboard.nextExam?.id).toBe(exam.id);
+    expect(dashboard.attachmentBytes).toBe(new Blob(['sample-paper-pdf']).size + new Blob(['sample-answer-pdf']).size);
     const backup = await exportProjectBackup(project.id, database);
     const prepared = await prepareProjectBackup(backup.blob);
     await deleteProject(project.id, database);
