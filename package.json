@@ -1,6 +1,6 @@
 {
   "name": "curriculumflow",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -35,6 +35,7 @@
     "typescript": "^5.9.2",
     "typescript-eslint": "^8.46.0",
     "vite": "^7.3.0",
+    "vite-plugin-pwa": "^1.3.0",
     "vitest": "^4.1.11"
   },
   "overrides": {

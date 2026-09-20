@@ -8,6 +8,7 @@ export interface SchedulerInput {
   courseSchedules: CourseSchedule[];
   scheduleOverrides: ScheduleOverride[];
   tasks: TeachingTask[];
+  reservedSlots?: Array<{ date: string; period: number }>;
 }
 export interface DraftLesson {
   taskId: string; date: string; weekNumber: number; period: number;
@@ -106,7 +107,11 @@ export function schedule(input: SchedulerInput): ScheduleResult {
   } catch (error) { return invalid(error instanceof Error ? error.message : '排课输入无效。', tasks); }
 
   let slots: TeachingSlot[];
-  try { slots = buildTeachingSlots(project.startDate, calendarDays, courseSchedules, scheduleOverrides); }
+  try {
+    const reserved = new Set(input.reservedSlots?.map(slot => `${slot.date}:${slot.period}`) ?? []);
+    slots = buildTeachingSlots(project.startDate, calendarDays, courseSchedules, scheduleOverrides)
+      .filter(slot => !reserved.has(`${slot.date}:${slot.period}`));
+  }
   catch (error) { return invalid(error instanceof Error ? error.message : '无法生成课时槽。', tasks); }
 
   const conflicts: ScheduleConflict[] = [];

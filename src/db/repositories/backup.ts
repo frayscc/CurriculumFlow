@@ -3,7 +3,7 @@ import { BACKUP_SCHEMA_VERSION, backupTables, sha256, validateManifest, type Bac
 import type { SemesterProject } from '../../types/domain';
 import { db as appDb } from '../schema';
 
-const appVersion = '0.10.0';
+const appVersion = '1.0.0';
 const maxZipBytes = 750 * 1024 * 1024;
 
 export async function exportProjectBackup(projectId: string, database = appDb): Promise<{ blob: Blob; filename: string }> {
@@ -24,7 +24,7 @@ export async function exportProjectBackup(projectId: string, database = appDb): 
     specialDuties: await database.specialDuties.where('projectId').equals(projectId).toArray(),
     exams: await database.exams.where('projectId').equals(projectId).toArray(),
     examFiles: await database.examFiles.where('projectId').equals(projectId).toArray(),
-    teachers: [], settings: await database.settings.where('projectId').equals(projectId).toArray(),
+    teachers: [], settings: (await database.settings.toArray()).filter(row => row.projectId === projectId || row.key.startsWith('naming:')),
   };
   const teacherIds = new Set([...data.exams.flatMap(exam => [...exam.authorIds, ...exam.reviewerIds]), ...data.specialDuties.map(duty => duty.teacherId).filter((id): id is string => !!id)]);
   data.teachers = await database.teachers.bulkGet([...teacherIds]).then(rows => rows.filter((row): row is NonNullable<typeof row> => !!row));
@@ -104,7 +104,7 @@ export async function restoreProjectBackup(prepared: PreparedBackup, database = 
     await database.specialDuties.bulkAdd(data.specialDuties.map(row => ({ ...row, id: id(row.id)!, projectId: newProjectId, teacherId: id(row.teacherId), taskId: id(row.taskId) })));
     await database.examFiles.bulkAdd(data.examFiles.map(row => ({ ...row, id: id(row.id)!, projectId: newProjectId, examId: id(row.examId)!, blobId: id(row.blobId)! })));
     await database.fileBlobs.bulkAdd(manifest.files.map(row => ({ id: id(row.blobId)!, blob: blobs.get(row.blobId)! })));
-    await database.settings.bulkAdd(data.settings.map(row => ({ ...row, key: `${newProjectId}:${row.key}`, projectId: newProjectId })));
+    await database.settings.bulkPut(data.settings.map(row => row.projectId === undefined ? row : { ...row, key: `${newProjectId}:${row.key}`, projectId: newProjectId }));
   });
   return project;
 }

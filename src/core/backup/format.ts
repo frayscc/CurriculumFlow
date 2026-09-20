@@ -28,7 +28,7 @@ export function validateManifest(value: unknown): BackupManifest {
     if (!Array.isArray(data[table])) throw new Error(`备份缺少 ${table}。`);
     for (const row of data[table]) {
       if (!object(row)) throw new Error(`${table} 包含无效记录。`);
-      if (table !== 'teachers' && row.projectId !== projectId) throw new Error(`${table} 项目关联不一致。`);
+      if (table !== 'teachers' && !(table === 'settings' && row.projectId === undefined) && row.projectId !== projectId) throw new Error(`${table} 项目关联不一致。`);
     }
   }
   const idTables = ['teachingTasks', 'planVersions', 'scheduledLessons', 'actualRecords', 'changeLogs', 'planAnnotations', 'specialDuties', 'exams', 'examFiles', 'teachers'] as const;
@@ -40,8 +40,13 @@ export function validateManifest(value: unknown): BackupManifest {
     const keys = (data[table] as Array<Record<string, unknown>>).map(row => row[key]);
     if (keys.some(keyValue => keyValue === undefined || keyValue === null) || new Set(keys).size !== keys.length) throw new Error(`${table} 存在重复键。`);
   }
+  for (const row of data.settings as Array<Record<string, unknown>>) if (!string(row.key) || (row.projectId === undefined && !row.key.startsWith('naming:'))) throw new Error('备份包含无效的全局设置。');
   const ids = (table: string) => new Set((data[table] as Array<Record<string, unknown>>).map(row => row.id));
   const tasks = ids('teachingTasks'), versions = ids('planVersions'), lessons = ids('scheduledLessons'), exams = ids('exams'), teachers = ids('teachers');
+  for (const row of data.planVersions as Array<Record<string, unknown>>) {
+    if (!Array.isArray(row.scheduleSnapshot)) throw new Error('计划版本缺少课次快照。');
+    for (const lesson of row.scheduleSnapshot) if (!object(lesson) || !string(lesson.id) || !tasks.has(lesson.taskId)) throw new Error('计划版本快照关联无效。');
+  }
   for (const row of data.scheduledLessons as Array<Record<string, unknown>>) if (!tasks.has(row.taskId) || !versions.has(row.planVersionId)) throw new Error('排课记录引用了不存在的任务或版本。');
   for (const row of data.actualRecords as Array<Record<string, unknown>>) if (!tasks.has(row.taskId) || (row.scheduledLessonId && !lessons.has(row.scheduledLessonId)) || (row.planVersionId && !versions.has(row.planVersionId))) throw new Error('实际记录关联无效。');
   for (const row of data.teachingTasks as Array<Record<string, unknown>>) if (row.examId && !exams.has(row.examId)) throw new Error('教学任务关联考试无效。');
@@ -52,6 +57,7 @@ export function validateManifest(value: unknown): BackupManifest {
   for (const row of data.specialDuties as Array<Record<string, unknown>>) if ((row.teacherId && !teachers.has(row.teacherId)) || (row.taskId && !tasks.has(row.taskId))) throw new Error('专训安排关联无效。');
   for (const row of data.planAnnotations as Array<Record<string, unknown>>) if (row.examId && !exams.has(row.examId)) throw new Error('计划注记关联考试无效。');
   const files = value.files;
+  if (files.reduce((total, file) => total + (object(file) && typeof file.size === 'number' ? file.size : 0), 0) > 750 * 1024 * 1024) throw new Error('附件总量超过当前导入限制。');
   if (files.length !== (data.examFiles as unknown[]).length) throw new Error('附件清单数量不一致。');
   const fileIds = new Set<string>(), paths = new Set<string>();
   for (const file of files) {

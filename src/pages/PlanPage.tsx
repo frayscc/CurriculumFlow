@@ -4,7 +4,7 @@ import { Link, useParams } from 'react-router-dom';
 import { dateFromTimestamp, parseLocalDate } from '../core/calendar/dates';
 import { compactTitles } from '../core/plan/summary';
 import { buildScheduledWeeks, type DraftLesson } from '../core/scheduler';
-import { confirmScheduleDraft, createScheduleDraft, type ScheduleDraft } from '../db/repositories/plans';
+import { confirmScheduleDraft, createRescheduleDraft, createScheduleDraft, type ScheduleDraft } from '../db/repositories/plans';
 import { db } from '../db/schema';
 import type { ScheduledLesson } from '../types/domain';
 
@@ -41,6 +41,12 @@ export function PlanPage() {
     catch (caught) { setError(caught instanceof Error ? caught.message : '生成排课草案失败。'); }
     finally { setBusy(false); }
   }
+  async function generateAfterPostponement() {
+    setBusy(true); setError('');
+    try { setDraft(await createRescheduleDraft(projectId)); setReason('延期后顺延'); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : '重新计算失败。'); }
+    finally { setBusy(false); }
+  }
   async function confirm() {
     if (!draft) return;
     setBusy(true); setError('');
@@ -66,11 +72,13 @@ export function PlanPage() {
   for (const lesson of sortedLessons) byDate.set(lesson.date, [...(byDate.get(lesson.date) ?? []), lesson]);
 
   return <main className="workspace plan-workspace"><Link className="back-link" to={`/projects/${projectId}`}>← 返回项目概览</Link>
-    <div className="page-heading"><div><p className="eyebrow">{project.grade}{project.subject} · {project.semester}</p><h1>教学计划</h1><p className="muted">由校历、学科课表和任务队列计算；确认后形成不可变计划版本。</p></div><button className="button primary" onClick={() => void generate()} disabled={busy || tasks.length === 0}>{busy ? '计算中…' : currentVersion ? '重新排程' : '生成排课草案'}</button></div>
+    <div className="page-heading"><div><p className="eyebrow">{project.grade}{project.subject} · {project.semester}</p><h1>教学计划</h1><p className="muted">由校历、学科课表和任务队列计算；确认后形成不可变计划版本。</p></div><div className="header-actions">{currentVersion && <button className="button secondary" onClick={() => void generateAfterPostponement()} disabled={busy}>延期后顺延</button>}<button className="button primary" onClick={() => void generate()} disabled={busy || tasks.length === 0}>{busy ? '计算中…' : currentVersion ? '全部重新排程' : '生成排课草案'}</button></div></div>
     {error && <p className="error page-error" role="alert">{error}</p>}
     {tasks.length === 0 && <div className="empty-state"><h2>先录入教学任务</h2><p>排课需要有顺序的教学任务和预计课时。</p><Link className="button primary" to={`/projects/${projectId}/tasks`}>打开任务队列</Link></div>}
     {draft && <section className="section-panel plan-draft"><div className="draft-heading"><h2>排课草案</h2><span>{draft.result.lessons.length} / {draft.result.slots.length} 个课时已安排</span></div>
       {currentVersion && <p className="muted">与 V{currentVersion.version} 相比，{countMoved(currentLessons, draft.result.lessons)} 个课时的位置发生变化或新加入。</p>}
+      {draft.kind === 'reflow' && <p className="muted">从 {draft.cutoff} 的延期课次开始顺延；已完成课次和此前计划保留在新版本中。</p>}
+      {currentVersion && <div className="table-scroll"><table className="data-table"><thead><tr><th>教学内容</th><th>原计划</th><th>调整后</th></tr></thead><tbody>{draft.result.lessons.filter(lesson => currentLessons.find(old => old.taskId === lesson.taskId && old.taskPeriodIndex === lesson.taskPeriodIndex)?.date !== lesson.date || currentLessons.find(old => old.taskId === lesson.taskId && old.taskPeriodIndex === lesson.taskPeriodIndex)?.period !== lesson.period).map(lesson => { const old = currentLessons.find(item => item.taskId === lesson.taskId && item.taskPeriodIndex === lesson.taskPeriodIndex); return <tr key={`${lesson.taskId}:${lesson.taskPeriodIndex}`}><td>{tasksById.get(lesson.taskId)?.title ?? lesson.taskId} · 第{lesson.taskPeriodIndex}课时</td><td>{old ? `${old.date} 第${old.period}节` : '新增'}</td><td>{lesson.date} 第{lesson.period}节</td></tr>; })}</tbody></table></div>}
       {draft.result.conflicts.length > 0 && <div className="conflict-list">{draft.result.conflicts.map((conflict, index) => <p key={`${conflict.code}-${index}`}>⚠ {conflict.message}</p>)}</div>}
       {draft.result.unscheduled.length > 0 && <p className="error">还有 {draft.result.unscheduled.reduce((sum, item) => sum + item.remainingPeriods, 0)} 课时未排入，请调整任务或课表后重新生成。</p>}
       <div className="draft-actions"><label>版本原因 <input value={reason} onChange={event => setReason(event.target.value)} placeholder="例如 开学初计划" /></label><button className="button secondary" onClick={() => setDraft(null)}>放弃草案</button><button className="button primary" onClick={() => void confirm()} disabled={busy || !reason.trim() || draft.result.conflicts.length > 0 || draft.result.unscheduled.length > 0}>确认并保存新版本</button></div>

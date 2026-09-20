@@ -19,6 +19,7 @@ describe('complete project backup', () => {
 
   it('restores records, references and original attachment bytes after project deletion', async () => {
     const project = await createProject(input, database);
+    await database.settings.put({ key: 'naming:paper_pdf', value: '原命名规则' });
     await setCourseSchedule(project.id, 2, [1], database);
     const exam = await createExam(project.id, { title: '单元检测', examType: 'chapter_test', authorNames: ['甲老师'], reviewerNames: [] }, database);
     await uploadExamFile(exam.id, 'paper_pdf', new Blob(['real-paper'], { type: 'application/pdf' }), '试卷.pdf', database);
@@ -29,6 +30,7 @@ describe('complete project backup', () => {
     const prepared = await prepareProjectBackup(backup.blob);
     expect(prepared.manifest.files).toHaveLength(1);
     await deleteProject(project.id, database);
+    await database.settings.put({ key: 'naming:paper_pdf', value: '临时规则' });
     const restored = await restoreProjectBackup(prepared, database);
     expect(restored.id).not.toBe(project.id);
     expect(await database.calendarDays.where('projectId').equals(restored.id).count()).toBe(12);
@@ -39,6 +41,7 @@ describe('complete project backup', () => {
     const restoredExam = (await database.exams.where('projectId').equals(restored.id).first())!;
     expect(restoredExam.authorIds).toHaveLength(1);
     expect(await database.teachers.get(restoredExam.authorIds[0])).toBeDefined();
+    expect((await database.settings.get('naming:paper_pdf'))?.value).toBe('原命名规则');
     const restoredLesson = (await database.scheduledLessons.where('projectId').equals(restored.id).first())!;
     expect((await database.actualRecords.where('projectId').equals(restored.id).first())!.scheduledLessonId).toBe(restoredLesson.id);
   });

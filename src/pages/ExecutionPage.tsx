@@ -52,29 +52,37 @@ export function ExecutionPage() {
   const project = useLiveQuery(() => db.projects.get(projectId), [projectId]);
   const currentVersion = useLiveQuery(() => db.planVersions.where('[projectId+version]').between([projectId, 0], [projectId, Infinity]).last(), [projectId]);
   const lessons = useLiveQuery(() => currentVersion ? db.scheduledLessons.where('planVersionId').equals(currentVersion.id).toArray() : Promise.resolve([] as ScheduledLesson[]), [currentVersion?.id]);
+  const allLessons = useLiveQuery(() => db.scheduledLessons.where('projectId').equals(projectId).toArray(), [projectId]);
   const actualRecords = useLiveQuery(() => db.actualRecords.where('projectId').equals(projectId).toArray(), [projectId]);
   const [filter, setFilter] = useState<'all' | 'week' | 'today'>('all');
   const [editing, setEditing] = useState<ScheduledLesson | null>(null);
 
-  if (project === undefined || lessons === undefined || actualRecords === undefined || currentVersion === undefined) return <main className="workspace">正在读取教学执行记录…</main>;
+  if (project === undefined || lessons === undefined || allLessons === undefined || actualRecords === undefined || currentVersion === undefined) return <main className="workspace">正在读取教学执行记录…</main>;
   if (!project) return <main className="workspace"><Link to="/">返回项目列表</Link><h1>项目不存在</h1></main>;
   if (!currentVersion) return <main className="workspace"><Link className="back-link" to={`/projects/${projectId}`}>← 返回项目概览</Link><div className="empty-state"><h2>请先生成教学计划</h2><p>确认排课版本后，才能逐课记录实际执行。</p><Link className="button primary" to={`/projects/${projectId}/plan`}>打开教学计划</Link></div></main>;
 
   const today = localToday();
   const currentWeek = teachingWeekNumber(project.startDate, today);
-  const recordByLesson = new Map(actualRecords.filter(record => record.planVersionId === currentVersion.id).map(record => [record.scheduledLessonId, record]));
+  const allLessonById = new Map(allLessons.map(lesson => [lesson.id, lesson]));
+  const priorCompleted = new Map<string, ActualTeachingRecord>();
+  for (const record of actualRecords.filter(item => item.status === 'completed' || item.status === 'partially_completed').sort((a, b) => a.updatedAt.localeCompare(b.updatedAt))) {
+    const source = record.scheduledLessonId ? allLessonById.get(record.scheduledLessonId) : undefined;
+    if (source) priorCompleted.set(`${source.taskId}:${source.taskPeriodIndex}`, record);
+  }
+  const recordByLesson = new Map(lessons.map(lesson => [lesson.id, priorCompleted.get(`${lesson.taskId}:${lesson.taskPeriodIndex}`)]));
+  for (const record of actualRecords.filter(item => item.planVersionId === currentVersion.id)) if (record.scheduledLessonId) recordByLesson.set(record.scheduledLessonId, record);
   const visible = [...lessons].filter(lesson => filter === 'all' || filter === 'today' && lesson.date === today || filter === 'week' && lesson.weekNumber === currentWeek)
     .sort((a, b) => a.date.localeCompare(b.date) || a.period - b.period);
   const completed = lessons.filter(lesson => recordByLesson.get(lesson.id)?.status === 'completed').length;
-  const differences = actualRecords.filter(record => record.planVersionId === currentVersion.id && ['partially_completed', 'postponed', 'cancelled'].includes(record.status));
+  const differences = actualRecords.filter(record => ['partially_completed', 'postponed', 'cancelled'].includes(record.status));
 
-  return <main className="workspace"><Link className="back-link" to={`/projects/${projectId}`}>← 返回项目概览</Link><div className="page-heading"><div><p className="eyebrow">V{currentVersion.version} · {currentVersion.reason}</p><h1>教学执行</h1><p className="muted">实际记录与原计划分别保存；调整校历、课表或任务后可生成新版计划。</p></div><Link className="button secondary" to={`/projects/${projectId}/plan`}>查看或调整计划 →</Link></div>
+  return <main className="workspace"><Link className="back-link" to={`/projects/${projectId}`}>← 返回项目概览</Link><div className="page-heading"><div><p className="eyebrow">V{currentVersion.version} · {currentVersion.reason}</p><h1>教学执行</h1><p className="muted">实际记录与原计划分别保存；延期后可预览后续顺延并确认新版计划。</p></div><Link className="button secondary" to={`/projects/${projectId}/plan`}>查看或调整计划 →</Link></div>
     <section className="overview-grid"><div className="stat-panel"><span>计划课时</span><strong>{lessons.length}</strong></div><div className="stat-panel"><span>已完成课时</span><strong>{completed}</strong></div><div className="stat-panel"><span>差异记录</span><strong>{differences.length}</strong></div></section>
     <section className="section-panel"><div className="execution-toolbar"><h2>计划课次</h2><select aria-label="筛选课次" value={filter} onChange={event => setFilter(event.target.value as typeof filter)}><option value="all">全部</option><option value="week">本周</option><option value="today">今天</option></select></div><div className="table-scroll"><table className="data-table"><thead><tr><th>计划日期</th><th>节次</th><th>教学内容</th><th>实际状态</th><th>实际日期</th><th>实际课时</th><th>操作</th></tr></thead><tbody>{visible.map(lesson => {
       const record = recordByLesson.get(lesson.id);
       return <tr key={lesson.id}><td>{lesson.date}</td><td>第 {lesson.period} 节</td><td>{lesson.taskTitle}{lesson.plannedPeriods > 1 ? ` (${lesson.taskPeriodIndex}/${lesson.plannedPeriods})` : ''}</td><td><span className={`status-tag ${record?.status ?? 'pending'}`}>{statusLabels[record?.status ?? 'pending']}</span></td><td>{record?.actualDate ?? '—'}</td><td>{record?.actualPeriods ?? '—'}</td><td><button className="text-button action-link" onClick={() => setEditing(lesson)}>{record ? '修改记录' : '记录实际'}</button></td></tr>;
     })}</tbody></table>{visible.length === 0 && <p className="no-results">当前范围没有计划课次。</p>}</div></section>
-    {differences.length > 0 && <section className="section-panel difference-panel"><h2>差异记录</h2>{differences.map(record => <div key={record.id} className="difference-row"><span>{record.plannedDate}</span><strong>{lessons.find(lesson => lesson.id === record.scheduledLessonId)?.taskTitle ?? record.taskId}</strong><span>{statusLabels[record.status]}</span><span>{record.reason ?? '未填写原因'}</span></div>)}</section>}
+    {differences.length > 0 && <section className="section-panel difference-panel"><h2>差异记录（含历史版本）</h2>{differences.map(record => <div key={record.id} className="difference-row"><span>{record.plannedDate}</span><strong>{allLessonById.get(record.scheduledLessonId ?? '')?.taskTitle ?? record.taskId}</strong><span>{statusLabels[record.status]}</span><span>{record.reason ?? '未填写原因'}</span></div>)}</section>}
     {editing && <ActualEditor key={editing.id} lesson={editing} previous={recordByLesson.get(editing.id)} onClose={() => setEditing(null)} />}
   </main>;
 }
