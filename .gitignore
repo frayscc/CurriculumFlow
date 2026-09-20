@@ -1,5 +1,7 @@
 node_modules/
 dist/
+dist-portable/
+releases/
 coverage/
 .DS_Store
 *.local

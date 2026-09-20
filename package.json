@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:portable": "tsc -b && vite build --config vite.portable.config.ts && node scripts/package-portable.mjs",
     "preview": "vite preview",
     "lint": "eslint .",
     "test": "vitest run"
@@ -36,6 +37,7 @@
     "typescript-eslint": "^8.46.0",
     "vite": "^7.3.0",
     "vite-plugin-pwa": "^1.3.0",
+    "vite-plugin-singlefile": "^2.3.3",
     "vitest": "^4.1.11"
   },
   "overrides": {
