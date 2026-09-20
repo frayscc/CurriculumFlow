@@ -19,6 +19,7 @@ function TaskEditor({ task, projectId, onClose, onPeriodChange }: {
   onPeriodChange: (task: TeachingTask) => void;
 }) {
   const [input, setInput] = useState<TaskInput>(task ?? empty);
+  const exams = useLiveQuery(() => db.exams.where('projectId').equals(projectId).toArray(), [projectId]) ?? [];
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState('');
   const [fixedMode, setFixedMode] = useState<'none' | 'date' | 'week'>(task?.fixedDate ? 'date' : task?.fixedWeek ? 'week' : 'none');
@@ -41,6 +42,7 @@ function TaskEditor({ task, projectId, onClose, onPeriodChange }: {
     <div className="form-grid"><label>章节 <input value={input.chapter ?? ''} onChange={event => set('chapter', event.target.value)} placeholder="例如 第13章" /></label><label>小节 <input value={input.section ?? ''} onChange={event => set('section', event.target.value)} placeholder="例如 13.1" /></label></div>
     <div className="form-grid"><label>固定节点 <select value={fixedMode} onChange={event => setFixedMode(event.target.value as 'none' | 'date' | 'week')}><option value="none">不固定</option><option value="date">指定日期</option><option value="week">指定教学周</option></select></label>{fixedMode === 'date' && <label>固定日期 <input type="date" value={input.fixedDate ?? ''} onChange={event => set('fixedDate', event.target.value)} required /></label>}{fixedMode === 'week' && <label>固定周次 <input type="number" min="1" value={input.fixedWeek ?? ''} onChange={event => set('fixedWeek', Number(event.target.value))} required /></label>}</div>
     <label className="checkbox-label"><input type="checkbox" checked={input.allowSplit} onChange={event => set('allowSplit', event.target.checked)} />允许跨日期拆分课时</label>
+    <label>关联考试资源 <select value={input.examId ?? ''} onChange={event => set('examId', event.target.value || undefined)}><option value="">不关联</option>{exams.map(exam => <option key={exam.id} value={exam.id}>{exam.title}</option>)}</select></label>
     <label>备注 <input value={input.note ?? ''} onChange={event => set('note', event.target.value)} placeholder="可选" /></label>
     {formError && <p className="error" role="alert">{formError}</p>}
     <div className="dialog-actions"><button className="button secondary" type="button" onClick={onClose}>取消</button><button className="button primary" type="submit" disabled={busy}>{busy ? '保存中…' : task ? '保存修改' : '添加任务'}</button></div>

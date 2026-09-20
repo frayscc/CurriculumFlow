@@ -24,10 +24,11 @@ function validate(input: TaskInput, project: SemesterProject): TaskInput {
 }
 
 export async function createTask(projectId: string, input: TaskInput, database = appDb): Promise<TeachingTask> {
-  return database.transaction('rw', database.projects, database.teachingTasks, async () => {
+  return database.transaction('rw', database.projects, database.teachingTasks, database.exams, async () => {
     const project = await database.projects.get(projectId);
     if (!project) throw new Error('项目不存在。');
     const data = validate(input, project);
+    if (data.examId && (await database.exams.get(data.examId))?.projectId !== projectId) throw new Error('关联考试不属于当前项目。');
     const last = await database.teachingTasks.where('[projectId+order]').between([projectId, 0], [projectId, Infinity]).last();
     const now = new Date().toISOString();
     const task: TeachingTask = { ...data, id: crypto.randomUUID(), projectId, order: (last?.order ?? 0) + 1, createdAt: now, updatedAt: now };
@@ -37,12 +38,13 @@ export async function createTask(projectId: string, input: TaskInput, database =
 }
 
 export async function updateTask(taskId: string, input: TaskInput, database = appDb): Promise<TeachingTask> {
-  return database.transaction('rw', database.projects, database.teachingTasks, database.changeLogs, async () => {
+  return database.transaction('rw', database.projects, database.teachingTasks, database.changeLogs, database.exams, async () => {
     const old = await database.teachingTasks.get(taskId);
     if (!old) throw new Error('教学任务不存在。');
     const project = await database.projects.get(old.projectId);
     if (!project) throw new Error('项目不存在。');
     const data = validate(input, project);
+    if (data.examId && (await database.exams.get(data.examId))?.projectId !== old.projectId) throw new Error('关联考试不属于当前项目。');
     const next: TeachingTask = { ...old, ...data, updatedAt: new Date().toISOString() };
     await database.teachingTasks.put(next);
     await database.changeLogs.add({ id: crypto.randomUUID(), projectId: old.projectId, entityType: 'TeachingTask', entityId: old.id, action: 'update', before: old, after: next, timestamp: next.updatedAt });

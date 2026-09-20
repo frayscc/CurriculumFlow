@@ -9,6 +9,8 @@ import { CalendarPage } from './CalendarPage';
 import { TasksPage } from './TasksPage';
 import { PlanPage } from './PlanPage';
 import { ExecutionPage } from './ExecutionPage';
+import { ExamPage } from './ExamPage';
+import { ArchivePage } from './ArchivePage';
 
 function projectTitle(project: SemesterProject) {
   return `${project.schoolYear}学年 · ${project.grade}${project.subject} · ${project.semester}`;
@@ -79,6 +81,7 @@ function ProjectPage() {
       <section className="section-panel feature-link-panel"><div><h2>教学任务队列</h2><p>按顺序维护新课、练习、检测、考试和复习任务。</p></div><Link className="button primary" to={`/projects/${project.id}/tasks`}>打开任务队列 →</Link></section>
       <section className="section-panel feature-link-panel"><div><h2>教学计划</h2><p>生成排课草案，查看周计划和日历，并保留计划版本。</p></div><Link className="button primary" to={`/projects/${project.id}/plan`}>打开教学计划 →</Link></section>
       <section className="section-panel feature-link-panel"><div><h2>教学执行</h2><p>逐课记录完成、部分完成、延期和取消情况。</p></div><Link className="button primary" to={`/projects/${project.id}/execution`}>打开教学执行 →</Link></section>
+      <section className="section-panel feature-link-panel"><div><h2>考试资源</h2><p>管理命题人、审题人和试卷、答题卡、答案等附件。</p></div><Link className="button primary" to={`/projects/${project.id}/exams`}>打开考试资源 →</Link></section>
       <section className="section-panel"><h2>项目基础信息</h2><dl className="detail-grid"><dt>学年</dt><dd>{project.schoolYear}</dd><dt>年级</dt><dd>{project.grade}</dd><dt>学科</dt><dd>{project.subject}</dd><dt>学期</dt><dd>{project.semester}</dd><dt>创建时间</dt><dd>{new Date(project.createdAt).toLocaleString('zh-CN')}</dd><dt>保存状态</dt><dd>已自动保存到本机</dd></dl></section>
       {editing && <ProjectForm title="编辑项目信息" submitLabel="保存修改" initial={project} onCancel={() => setEditing(false)} onSubmit={async input => { await updateProject(project.id, input); setEditing(false); }} />}
     </main>
@@ -86,5 +89,5 @@ function ProjectPage() {
 }
 
 export function App() {
-  return <div className="app-shell"><header className="app-header"><Link to="/" className="brand"><span className="brand-mark">C</span><span>CurriculumFlow</span></Link><span className="header-note">本地教学工作空间</span></header><Routes><Route path="/" element={<Home />} /><Route path="/projects/:projectId" element={<ProjectPage />} /><Route path="/projects/:projectId/calendar" element={<CalendarPage />} /><Route path="/projects/:projectId/tasks" element={<TasksPage />} /><Route path="/projects/:projectId/plan" element={<PlanPage />} /><Route path="/projects/:projectId/execution" element={<ExecutionPage />} /><Route path="*" element={<main className="workspace"><h1>页面不存在</h1><Link to="/">返回项目列表</Link></main>} /></Routes></div>;
+  return <div className="app-shell"><header className="app-header"><Link to="/" className="brand"><span className="brand-mark">C</span><span>CurriculumFlow</span></Link><span className="header-note"><Link to="/archive">考试资源库</Link> · 本地教学工作空间</span></header><Routes><Route path="/" element={<Home />} /><Route path="/archive" element={<ArchivePage />} /><Route path="/projects/:projectId" element={<ProjectPage />} /><Route path="/projects/:projectId/calendar" element={<CalendarPage />} /><Route path="/projects/:projectId/tasks" element={<TasksPage />} /><Route path="/projects/:projectId/plan" element={<PlanPage />} /><Route path="/projects/:projectId/execution" element={<ExecutionPage />} /><Route path="/projects/:projectId/exams" element={<ExamPage />} /><Route path="/projects/:projectId/exams/:examId" element={<ExamPage />} /><Route path="*" element={<main className="workspace"><h1>页面不存在</h1><Link to="/">返回项目列表</Link></main>} /></Routes></div>;
 }
