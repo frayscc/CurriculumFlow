@@ -52,6 +52,7 @@ export function ProjectForm({ initial, title, submitLabel, onSubmit, onCancel, c
             <label>开始日期 <input type="date" value={value.startDate} onChange={event => set('startDate', event.target.value)} required /></label>
             <label>结束日期 <input type="date" value={value.endDate} onChange={event => set('endDate', event.target.value)} required /></label>
           </div>
+          {!initial && <p className="form-hint">创建后会直接进入可视化校历，可在月历上标注节假日、调休、考试和停课。</p>}
           {children}
           {error && <p role="alert" className="error">{error}</p>}
           <div className="dialog-actions">

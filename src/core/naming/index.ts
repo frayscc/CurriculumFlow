@@ -41,7 +41,7 @@ export function extensionOf(filename: string): string {
 
 export function namedExamFile(file: ExamFile, project: SemesterProject, exam: Exam, templates = defaultNamingTemplates): string {
   const key: keyof NamingTemplates = file.fileType.startsWith('paper_') ? 'paper'
-    : file.fileType === 'answer_sheet_pdf' ? 'answerSheet'
+    : file.fileType.startsWith('answer_sheet_') ? 'answerSheet'
       : file.fileType.startsWith('answer_') ? 'answer' : 'specification';
   return `${renderName(templates[key], project, exam)}${extensionOf(file.originalFileName)}`;
 }
@@ -53,6 +53,7 @@ export function examZipName(project: SemesterProject, exam: Exam, templates = de
 export const examFileSlots: Array<{ type: ExamFileType; label: string; group: string; extensions: string[] }> = [
   { type: 'paper_word', label: '试卷 Word', group: '1、试卷', extensions: ['.doc', '.docx'] },
   { type: 'paper_pdf', label: '试卷 PDF', group: '1、试卷', extensions: ['.pdf'] },
+  { type: 'answer_sheet_word', label: '答题卡 Word', group: '2、答题卷', extensions: ['.doc', '.docx'] },
   { type: 'answer_sheet_pdf', label: '答题卡 PDF', group: '2、答题卷', extensions: ['.pdf'] },
   { type: 'answer_word', label: '答案 Word', group: '3、答案', extensions: ['.doc', '.docx'] },
   { type: 'answer_pdf', label: '答案 PDF', group: '3、答案', extensions: ['.pdf'] },

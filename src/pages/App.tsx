@@ -45,7 +45,7 @@ function Home() {
         </div>
       )}
       {creating && <ProjectForm title="新建学期项目" submitLabel="创建项目" onCancel={() => setCreating(false)} onSubmit={async input => {
-        const project = await createProject(input); setCreating(false); navigate(`/projects/${project.id}`);
+        const project = await createProject(input); setCreating(false); navigate(`/projects/${project.id}/calendar`);
       }} />}
       {copying && projects && <ProjectForm title="基于往届创建" submitLabel="创建并复制经验" onCancel={() => setCopying(false)} onSubmit={async input => {
         const project = await copyHistoricalProject(sourceProjectId, input, copyOptions);

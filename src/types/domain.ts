@@ -6,7 +6,7 @@ export type DayType = 'normal' | 'holiday' | 'makeup_workday' | 'school_event' |
 export type TaskType = 'new_lesson' | 'exercise' | 'quiz' | 'exam' | 'exam_review' | 'review' | 'self_study' | 'experiment' | 'special_training' | 'other';
 export type ActualStatus = 'pending' | 'completed' | 'partially_completed' | 'postponed' | 'cancelled';
 export type ExamType = 'quiz' | 'chapter_test' | 'monthly_exam' | 'midterm' | 'final' | 'mock_exam' | 'special_training' | 'other';
-export type ExamFileType = 'paper_word' | 'paper_pdf' | 'answer_sheet_pdf' | 'answer_word' | 'answer_pdf' | 'specification_xlsx';
+export type ExamFileType = 'paper_word' | 'paper_pdf' | 'answer_sheet_word' | 'answer_sheet_pdf' | 'answer_word' | 'answer_pdf' | 'specification_xlsx';
 
 export interface SemesterProject {
   id: ID; schoolYear: string; grade: string; subject: string; semester: string;

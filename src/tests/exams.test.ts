@@ -33,6 +33,18 @@ describe('exam resources', () => {
     expect(Object.keys(zip.files).some(path => path.includes('3、答案/'))).toBe(false);
   });
 
+  it('accepts DOC and DOCX answer sheets and places them in the answer-sheet folder', async () => {
+    const project = await createProject({ schoolYear: '2026-2027', grade: '九年级', subject: '物理', semester: '第一学期', startDate: '2026-09-01', endDate: '2027-01-23' }, database);
+    const exam = await createExam(project.id, { title: '期中考试', examType: 'midterm', authorNames: [], reviewerNames: [] }, database);
+    const answerSheet = await uploadExamFile(exam.id, 'answer_sheet_word', new Blob(['docx-bytes']), '原答题卡.DOCX', database);
+    expect(namedExamFile(answerSheet, project, exam)).toBe('（九年级物理学科）期中考试答题卷.docx');
+    const content = await database.fileBlobs.get(answerSheet.blobId);
+    const packageFile = await buildExamPackage(project, exam, [{ metadata: answerSheet, blob: content!.blob }]);
+    const zip = await JSZip.loadAsync(await packageFile.blob.arrayBuffer());
+    expect(Object.keys(zip.files).some(path => path.includes('2、答题卷/（九年级物理学科）期中考试答题卷.docx'))).toBe(true);
+    await expect(uploadExamFile(exam.id, 'answer_sheet_word', new Blob(['x']), '答题卡.pdf', database)).rejects.toThrow('仅支持');
+  });
+
   it('prevents deleting an exam linked to a teaching task', async () => {
     const project = await createProject({ schoolYear: '2026-2027', grade: '九年级', subject: '物理', semester: '第一学期', startDate: '2026-09-01', endDate: '2026-09-05' }, database);
     const exam = await createExam(project.id, { title: '单元检测', examType: 'chapter_test', authorNames: [], reviewerNames: [] }, database);
