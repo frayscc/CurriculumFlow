@@ -92,4 +92,15 @@ describe('deterministic scheduler', () => {
     const data = input(); data.calendarDays.pop(); data.tasks = [task('a', 1)];
     expect(schedule(data).conflicts[0].code).toBe('INVALID_INPUT');
   });
+
+  it('schedules a shared slot once and lets a fixed task target either real class date', () => {
+    const data = input();
+    data.project.weekStart = 1;
+    data.project.sharedCourseSlots = [{ id: 'shared', label: '周三/周四共享', members: [{ weekday: 3, period: 3 }, { weekday: 4, period: 3 }] }];
+    data.tasks = [task('shared lesson', 1, 1, { fixedDate: '2026-09-17' })];
+    const result = schedule(data);
+    expect(result.slots).toHaveLength(4);
+    expect(result.lessons[0]).toMatchObject({ date: '2026-09-17', period: 3, sharedSlotLabel: '周三/周四共享' });
+    expect(result.lessons[0].sharedOccurrences).toEqual([{ date: '2026-09-16', period: 3 }, { date: '2026-09-17', period: 3 }]);
+  });
 });

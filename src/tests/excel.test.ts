@@ -41,4 +41,22 @@ describe('work plan export', () => {
     expect(sheet.pageSetup.orientation).toBe('landscape');
     expect(sheet.pageSetup.paperSize).toBe(9);
   });
+
+  it('exports weekday columns from the configured start of week', async () => {
+    const project: SemesterProject = {
+      id: 'monday', schoolYear: '2026-2027', grade: '九年级', subject: '物理', semester: '第一学期',
+      startDate: '2026-09-01', endDate: '2026-09-07', weekStart: 1, createdAt: '', updatedAt: '',
+    };
+    const days = generateCalendarDays(project.id, project.startDate, project.endDate);
+    const rows = buildWorkPlanView({ project, lessons: [], calendarDays: days, weeklyNotes: [], exams: [], annotations: [], specialDuties: [] });
+    expect(rows[0].dates.map(day => day?.day ?? null)).toEqual([null, 1, 2, 3, 4, 5, 6]);
+
+    const blob = await buildWorkPlanXlsx(project, rows, days);
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(Buffer.from(await blob.arrayBuffer()) as unknown as Parameters<typeof workbook.xlsx.load>[0]);
+    const sheet = workbook.getWorksheet('备课组工作计划')!;
+    expect(sheet.getCell('C1').value).toBe('一');
+    expect(sheet.getCell('I1').value).toBe('日');
+    expect(sheet.getCell('H2').fill).toMatchObject({ fgColor: { argb: 'FFFABF8F' } });
+  });
 });

@@ -1,5 +1,5 @@
 import { generateCalendarDays, parseLocalDate } from '../../core/calendar/dates';
-import type { SemesterProject } from '../../types/domain';
+import type { SemesterProject, SharedCourseSlot, Weekday } from '../../types/domain';
 import { db as appDb, type CurriculumDatabase } from '../schema';
 
 export type ProjectInput = Pick<SemesterProject, 'schoolYear' | 'grade' | 'subject' | 'semester' | 'startDate' | 'endDate'>;
@@ -30,13 +30,34 @@ export async function createProject(input: ProjectInput, database = appDb): Prom
   const id = crypto.randomUUID();
   const calendarDays = generateCalendarDays(id, data.startDate, data.endDate);
   const now = new Date().toISOString();
-  const project: SemesterProject = { ...data, id, createdAt: now, updatedAt: now };
+  const project: SemesterProject = { ...data, id, weekStart: 7, sharedCourseSlots: [], createdAt: now, updatedAt: now };
   await database.transaction('rw', database.projects, database.calendarDays, async () => {
     await ensureUnique(data, database);
     await database.projects.add(project);
     await database.calendarDays.bulkAdd(calendarDays);
   });
   return project;
+}
+
+export async function updateCalendarPreferences(
+  id: string, weekStart: Weekday, sharedCourseSlots: SharedCourseSlot[], database = appDb,
+): Promise<SemesterProject> {
+  if (weekStart < 1 || weekStart > 7) throw new Error('一周开始日期无效。');
+  const occupied = new Set<string>();
+  for (const group of sharedCourseSlots) {
+    if (!group.id || !group.label.trim() || group.members.length < 2) throw new Error('共享课位至少需要两个有效日期。');
+    for (const member of group.members) {
+      if (member.weekday < 1 || member.weekday > 7 || !Number.isInteger(member.period) || member.period < 1 || member.period > 20) throw new Error('共享课位的星期或节次无效。');
+      const key = `${member.weekday}:${member.period}`;
+      if (occupied.has(key)) throw new Error('同一个星期和节次不能加入多个共享课位。');
+      occupied.add(key);
+    }
+  }
+  const project = await database.projects.get(id);
+  if (!project) throw new Error('项目不存在。');
+  const next = { ...project, weekStart, sharedCourseSlots: sharedCourseSlots.map(group => ({ ...group, label: group.label.trim() })), updatedAt: new Date().toISOString() };
+  await database.projects.put(next);
+  return next;
 }
 
 export async function updateProject(id: string, input: ProjectInput, database = appDb): Promise<SemesterProject> {

@@ -1,9 +1,9 @@
 import { buildTeachingSlots, normalizePeriods, type TeachingSlot } from '../calendar/availability';
-import { dateFromTimestamp, generateCalendarDays, parseLocalDate, teachingWeekNumber, weekdayOf } from '../calendar/dates';
+import { dateFromTimestamp, generateCalendarDays, parseLocalDate, startOfTeachingWeek, teachingWeekNumber, weekdayOf } from '../calendar/dates';
 import type { CalendarDay, CourseSchedule, ScheduleOverride, SemesterProject, TeachingTask } from '../../types/domain';
 
 export interface SchedulerInput {
-  project: Pick<SemesterProject, 'startDate' | 'endDate'>;
+  project: Pick<SemesterProject, 'startDate' | 'endDate' | 'weekStart' | 'sharedCourseSlots'>;
   calendarDays: CalendarDay[];
   courseSchedules: CourseSchedule[];
   scheduleOverrides: ScheduleOverride[];
@@ -13,6 +13,7 @@ export interface SchedulerInput {
 export interface DraftLesson {
   taskId: string; date: string; weekNumber: number; period: number;
   taskPeriodIndex: number; plannedPeriods: number;
+  sharedSlotLabel?: string; sharedOccurrences?: Array<{ date: string; period: number }>;
 }
 export interface ScheduleConflict {
   code: 'INVALID_INPUT' | 'NO_SLOT_ON_FIXED_DATE' | 'FIXED_WEEK_CAPACITY' | 'FIXED_CONFLICT' |
@@ -51,24 +52,29 @@ function contiguousRun(slots: TeachingSlot[], candidates: number[], count: numbe
 }
 
 function makeLessons(task: TeachingTask, indices: number[], slots: TeachingSlot[]): DraftLesson[] {
-  return indices.map((index, position) => ({
-    taskId: task.id, date: slots[index].date, weekNumber: slots[index].weekNumber,
-    period: slots[index].period, taskPeriodIndex: position + 1, plannedPeriods: task.plannedPeriods,
-  }));
+  return indices.map((index, position) => {
+    const slot = slots[index];
+    const fixedOccurrence = task.fixedDate ? slot.occurrences?.find(item => item.date === task.fixedDate) : undefined;
+    return {
+      taskId: task.id, date: fixedOccurrence?.date ?? slot.date, weekNumber: slot.weekNumber,
+      period: fixedOccurrence?.period ?? slot.period, taskPeriodIndex: position + 1, plannedPeriods: task.plannedPeriods,
+      sharedSlotLabel: slot.sharedSlotLabel, sharedOccurrences: slot.occurrences,
+    };
+  });
 }
 
 export function buildScheduledWeeks(project: SchedulerInput['project'], lessons: DraftLesson[]): ScheduledWeek[] {
   const start = parseLocalDate(project.startDate);
-  const firstSunday = start - new Date(start).getUTCDay() * 86_400_000;
-  const weekCount = teachingWeekNumber(project.startDate, project.endDate);
+  const firstWeekStart = startOfTeachingWeek(project.startDate, project.weekStart ?? 7);
+  const weekCount = teachingWeekNumber(project.startDate, project.endDate, project.weekStart ?? 7);
   return Array.from({ length: weekCount }, (_, index) => {
     const weekNumber = index + 1;
-    const sunday = firstSunday + index * 7 * 86_400_000;
+    const weekStart = firstWeekStart + index * 7 * 86_400_000;
     const weekLessons = lessons.filter(lesson => lesson.weekNumber === weekNumber);
     return {
       weekNumber,
-      startDate: dateFromTimestamp(Math.max(start, sunday)),
-      endDate: dateFromTimestamp(Math.min(parseLocalDate(project.endDate), sunday + 6 * 86_400_000)),
+      startDate: dateFromTimestamp(Math.max(start, weekStart)),
+      endDate: dateFromTimestamp(Math.min(parseLocalDate(project.endDate), weekStart + 6 * 86_400_000)),
       taskIds: [...new Set(weekLessons.map(lesson => lesson.taskId))],
       lessonCount: weekLessons.length,
     };
@@ -88,7 +94,7 @@ export function schedule(input: SchedulerInput): ScheduleResult {
     if (new Set(tasks.map(task => task.id)).size !== tasks.length || new Set(tasks.map(task => task.order)).size !== tasks.length) {
       return invalid('教学任务 ID 或顺序重复。', tasks);
     }
-    const maxWeek = teachingWeekNumber(project.startDate, project.endDate);
+    const maxWeek = teachingWeekNumber(project.startDate, project.endDate, project.weekStart ?? 7);
     for (const task of tasks) {
       if (!Number.isInteger(task.plannedPeriods) || task.plannedPeriods < 1 || (task.fixedDate && task.fixedWeek) ||
         (task.fixedDate && (task.fixedDate < project.startDate || task.fixedDate > project.endDate)) ||
@@ -100,6 +106,16 @@ export function schedule(input: SchedulerInput): ScheduleResult {
       return invalid('周课表或日期覆盖存在重复记录。', tasks);
     }
     for (const row of courseSchedules) normalizePeriods(row.periods);
+    const sharedIds = new Set<string>(); const sharedMembers = new Set<string>();
+    for (const group of project.sharedCourseSlots ?? []) {
+      if (!group.id || sharedIds.has(group.id) || !group.label.trim() || group.members.length < 2) return invalid('共享课位配置无效。', tasks);
+      sharedIds.add(group.id);
+      for (const member of group.members) {
+        const key = `${member.weekday}:${member.period}`;
+        if (sharedMembers.has(key) || !courseSchedules.some(row => row.weekday === member.weekday && row.periods.includes(member.period))) return invalid('共享课位必须关联课表中存在且不重复的节次。', tasks);
+        sharedMembers.add(key);
+      }
+    }
     for (const row of scheduleOverrides) {
       if (!dates.has(row.date)) return invalid('日期覆盖超出学期范围。', tasks);
       normalizePeriods(row.actualPeriods);
@@ -109,7 +125,9 @@ export function schedule(input: SchedulerInput): ScheduleResult {
   let slots: TeachingSlot[];
   try {
     const reserved = new Set(input.reservedSlots?.map(slot => `${slot.date}:${slot.period}`) ?? []);
-    slots = buildTeachingSlots(project.startDate, calendarDays, courseSchedules, scheduleOverrides)
+    slots = buildTeachingSlots(project.startDate, calendarDays, courseSchedules, scheduleOverrides, {
+      weekStart: project.weekStart ?? 7, sharedCourseSlots: project.sharedCourseSlots ?? [],
+    })
       .filter(slot => !reserved.has(`${slot.date}:${slot.period}`));
   }
   catch (error) { return invalid(error instanceof Error ? error.message : '无法生成课时槽。', tasks); }
@@ -123,10 +141,10 @@ export function schedule(input: SchedulerInput): ScheduleResult {
   // Fixed tasks reserve their constrained slots before ordinary tasks can use them.
   for (const task of tasks.filter(item => item.fixedDate || item.fixedWeek)) {
     const allMatching = slots.map((slot, index) => ({ slot, index })).filter(({ slot }) =>
-      task.fixedDate ? slot.date === task.fixedDate : slot.weekNumber === task.fixedWeek,
+      task.fixedDate ? slot.date === task.fixedDate || !!slot.occurrences?.some(item => item.date === task.fixedDate) : slot.weekNumber === task.fixedWeek,
     ).map(item => item.index);
     const candidates = slots.map((slot, index) => ({ slot, index })).filter(({ slot, index }) =>
-      !occupied.has(index) && (task.fixedDate ? slot.date === task.fixedDate : slot.weekNumber === task.fixedWeek),
+      !occupied.has(index) && (task.fixedDate ? slot.date === task.fixedDate || !!slot.occurrences?.some(item => item.date === task.fixedDate) : slot.weekNumber === task.fixedWeek),
     ).map(item => item.index);
     const selected = task.allowSplit ? candidates.slice(0, task.plannedPeriods) : contiguousRun(slots, candidates, task.plannedPeriods);
     selected.forEach(index => occupied.add(index));

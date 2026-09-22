@@ -15,6 +15,12 @@ describe('calendar dates', () => {
     expect(teachingWeekNumber('2026-09-01', '2027-01-23')).toBe(21);
   });
 
+  it('supports any configured weekday as the start of a teaching week', () => {
+    expect(teachingWeekNumber('2026-09-01', '2026-09-06', 1)).toBe(1);
+    expect(teachingWeekNumber('2026-09-01', '2026-09-07', 1)).toBe(2);
+    expect(teachingWeekNumber('2026-09-01', '2026-09-02', 3)).toBe(2);
+  });
+
   it('rejects invalid and reversed dates', () => {
     expect(() => generateCalendarDays('project', '2026-02-30', '2026-03-01')).toThrow('日期无效');
     expect(() => generateCalendarDays('project', '2026-10-02', '2026-09-01')).toThrow('结束日期');

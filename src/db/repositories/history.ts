@@ -23,7 +23,11 @@ export async function copyHistoricalProject(
     if (existing) throw new Error('同一学年、年级、学科和学期的项目已存在。');
     const id = crypto.randomUUID();
     const timestamp = new Date().toISOString();
-    const project: SemesterProject = { ...data, id, sourceProjectId, createdAt: timestamp, updatedAt: timestamp };
+    const project: SemesterProject = {
+      ...data, id, sourceProjectId, weekStart: source.weekStart ?? 7,
+      sharedCourseSlots: options.courseSchedule ? (source.sharedCourseSlots ?? []).map(group => ({ ...group, id: crypto.randomUUID() })) : [],
+      createdAt: timestamp, updatedAt: timestamp,
+    };
     const days = generateCalendarDays(id, data.startDate, data.endDate);
     if (options.calendar) {
       const oldDays = await database.calendarDays.where('projectId').equals(sourceProjectId).sortBy('date');
@@ -59,7 +63,7 @@ export async function copyHistoricalProject(
         };
       });
       if (newExams.length) await database.exams.bulkAdd(newExams);
-      const maxWeek = teachingWeekNumber(data.startDate, data.endDate);
+      const maxWeek = teachingWeekNumber(data.startDate, data.endDate, project.weekStart ?? 7);
       await database.teachingTasks.bulkAdd(selected.map((task, index) => ({
         ...task, id: crypto.randomUUID(), projectId: id, order: index + 1,
         plannedPeriods: options.plannedPeriods ? task.plannedPeriods : 1,

@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createProject, deleteProject, updateProject } from '../db/repositories/projects';
+import { createProject, deleteProject, updateCalendarPreferences, updateProject } from '../db/repositories/projects';
 import { CurriculumDatabase } from '../db/schema';
 import { applyCalendarRange, setCourseSchedule, setScheduleOverride, updateCalendarDay } from '../db/repositories/calendar';
 
@@ -53,5 +53,16 @@ describe('project repository', () => {
     expect(await database.calendarDays.get([project.id, '2026-09-01'])).toMatchObject({ dayType: 'normal' });
     await updateCalendarDay(project.id, '2026-09-04', { dayType: 'makeup_workday', scheduleWeekday: 5 }, database);
     expect(await database.calendarDays.get([project.id, '2026-09-04'])).toMatchObject({ dayType: 'makeup_workday', scheduleWeekday: 5 });
+  });
+
+  it('stores a custom week start and validates shared course slots', async () => {
+    const project = await createProject(initial, database);
+    const groups = [{ id: 'shared', label: '周三/周四共享', members: [{ weekday: 3 as const, period: 2 }, { weekday: 4 as const, period: 3 }] }];
+    const updated = await updateCalendarPreferences(project.id, 1, groups, database);
+    expect(updated).toMatchObject({ weekStart: 1, sharedCourseSlots: groups });
+    await expect(updateCalendarPreferences(project.id, 1, [
+      ...groups,
+      { id: 'duplicate', label: '重复', members: [{ weekday: 3, period: 2 }, { weekday: 5, period: 1 }] },
+    ], database)).rejects.toThrow('不能加入多个');
   });
 });

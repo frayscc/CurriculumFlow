@@ -3,7 +3,7 @@ import { BACKUP_SCHEMA_VERSION, backupTables, sha256, validateManifest, type Bac
 import type { SemesterProject } from '../../types/domain';
 import { db as appDb } from '../schema';
 
-const appVersion = '1.1.0';
+const appVersion = '1.2.0';
 const maxZipBytes = 750 * 1024 * 1024;
 
 export async function exportProjectBackup(projectId: string, database = appDb): Promise<{ blob: Blob; filename: string }> {

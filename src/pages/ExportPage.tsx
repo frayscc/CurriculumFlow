@@ -41,9 +41,10 @@ export function ExportPage() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
-  const rows = useMemo(() => project && lessons && days && weeklyNotes && annotations && duties && exams
-    ? buildWorkPlanView({ project, lessons, calendarDays: days, weeklyNotes, annotations, specialDuties: duties, exams }) : [],
-  [project, lessons, days, weeklyNotes, annotations, duties, exams]);
+  const exportProject = project ? { ...project, weekStart: currentVersion?.weekStart ?? project.weekStart ?? 7 } : undefined;
+  const rows = useMemo(() => exportProject && lessons && days && weeklyNotes && annotations && duties && exams
+    ? buildWorkPlanView({ project: exportProject, lessons, calendarDays: days, weeklyNotes, annotations, specialDuties: duties, exams }) : [],
+  [exportProject, lessons, days, weeklyNotes, annotations, duties, exams]);
 
   async function addAnnotation(event: FormEvent) {
     event.preventDefault(); setError('');
@@ -58,11 +59,11 @@ export function ExportPage() {
     catch (caught) { setError(caught instanceof Error ? caught.message : '专训安排保存失败。'); }
   }
   async function download() {
-    if (!project || !days) return;
+    if (!exportProject || !days) return;
     setBusy(true); setError('');
     try {
       const { buildWorkPlanXlsx, workPlanFilename } = await import('../core/excel/workbook');
-      browserFileService.saveFile(await buildWorkPlanXlsx(project, rows, days), workPlanFilename(project));
+      browserFileService.saveFile(await buildWorkPlanXlsx(exportProject, rows, days), workPlanFilename(exportProject));
     } catch (caught) { setError(caught instanceof Error ? caught.message : 'Excel 导出失败。'); }
     finally { setBusy(false); }
   }

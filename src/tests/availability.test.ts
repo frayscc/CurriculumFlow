@@ -40,4 +40,19 @@ describe('teaching availability', () => {
     expect(parsePeriods('')).toEqual([]);
     expect(() => parsePeriods('第3节')).toThrow('节次');
   });
+
+  it('counts linked weekdays as one shared teaching-progress slot per week', () => {
+    const days = generateCalendarDays('p', '2026-09-14', '2026-09-20');
+    const sharedSchedules: CourseSchedule[] = [
+      { projectId: 'p', weekday: 3, periods: [2] },
+      { projectId: 'p', weekday: 4, periods: [4] },
+    ];
+    const slots = buildTeachingSlots('2026-09-14', days, sharedSchedules, [], {
+      weekStart: 1,
+      sharedCourseSlots: [{ id: 'shared', label: '周三/周四共享', members: [{ weekday: 3, period: 2 }, { weekday: 4, period: 4 }] }],
+    });
+    expect(slots).toHaveLength(1);
+    expect(slots[0]).toMatchObject({ date: '2026-09-16', period: 2, sharedSlotLabel: '周三/周四共享' });
+    expect(slots[0].occurrences).toEqual([{ date: '2026-09-16', period: 2 }, { date: '2026-09-17', period: 4 }]);
+  });
 });

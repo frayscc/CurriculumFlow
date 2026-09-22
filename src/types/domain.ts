@@ -10,8 +10,13 @@ export type ExamFileType = 'paper_word' | 'paper_pdf' | 'answer_sheet_word' | 'a
 
 export interface SemesterProject {
   id: ID; schoolYear: string; grade: string; subject: string; semester: string;
-  startDate: LocalDate; endDate: LocalDate; sourceProjectId?: ID;
+  startDate: LocalDate; endDate: LocalDate; sourceProjectId?: ID; weekStart?: Weekday;
+  sharedCourseSlots?: SharedCourseSlot[];
   createdAt: Timestamp; updatedAt: Timestamp;
+}
+export interface SharedCourseSlot {
+  id: ID; label: string;
+  members: Array<{ weekday: Weekday; period: number }>;
 }
 export interface CalendarDay {
   projectId: ID; date: LocalDate; weekday: Weekday; dayType: DayType;
@@ -27,10 +32,11 @@ export interface TeachingTask {
 export interface ScheduledLessonSnapshot {
   id: ID; taskId: ID; date: LocalDate; weekNumber: number; period: number;
   taskPeriodIndex: number; plannedPeriods: number; taskTitle: string; taskType: TaskType;
+  sharedSlotLabel?: string; sharedOccurrences?: Array<{ date: LocalDate; period: number }>;
 }
 export interface PlanVersion {
   id: ID; projectId: ID; version: number; createdAt: Timestamp; reason: string;
-  scheduleSnapshot: ScheduledLessonSnapshot[]; inputFingerprint: string;
+  scheduleSnapshot: ScheduledLessonSnapshot[]; inputFingerprint: string; weekStart?: Weekday;
 }
 export interface ScheduledLesson extends ScheduledLessonSnapshot { projectId: ID; planVersionId: ID; }
 export interface ActualTeachingRecord {

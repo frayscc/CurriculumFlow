@@ -14,7 +14,7 @@ function validate(input: TaskInput, project: SemesterProject): TaskInput {
   if (!Number.isInteger(input.plannedPeriods) || input.plannedPeriods < 1 || input.plannedPeriods > 100) throw new Error('预计课时须为 1 至 100 的整数。');
   if (input.fixedDate && input.fixedWeek) throw new Error('固定日期和固定周次只能选择一种。');
   if (input.fixedDate && (input.fixedDate < project.startDate || input.fixedDate > project.endDate)) throw new Error('固定日期不在学期范围内。');
-  const maxWeek = teachingWeekNumber(project.startDate, project.endDate);
+  const maxWeek = teachingWeekNumber(project.startDate, project.endDate, project.weekStart ?? 7);
   if (input.fixedWeek && (!Number.isInteger(input.fixedWeek) || input.fixedWeek < 1 || input.fixedWeek > maxWeek)) throw new Error(`固定周次须为 1 至 ${maxWeek}。`);
   return {
     ...input, title, chapter: input.chapter?.trim() || undefined,

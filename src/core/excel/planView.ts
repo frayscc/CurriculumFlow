@@ -1,10 +1,10 @@
 import { compactTitles } from '../plan/summary';
-import { teachingWeekNumber } from '../calendar/dates';
+import { orderedWeekdays, teachingWeekNumber } from '../calendar/dates';
 import type { CalendarDay, Exam, PlanAnnotation, ScheduledLesson, SemesterProject, SpecialTrainingDuty, WeeklyNote } from '../../types/domain';
 
 export interface WorkPlanRow {
   month: string; weekNumber: number; startDate: string; endDate: string;
-  dates: Array<{ day: number; date: string } | null>; // C:I, Sunday to Saturday
+  dates: Array<{ day: number; date: string } | null>; // C:I, project week-start order
   firstWeekSegment: boolean; content: string; periods: number;
   note: string; assessment: string; specialTraining: string;
 }
@@ -18,7 +18,7 @@ export function buildWorkPlanView(input: {
   const orderedDays = [...calendarDays].sort((a, b) => a.date.localeCompare(b.date));
   const groups = new Map<string, CalendarDay[]>();
   for (const day of orderedDays) {
-    const week = teachingWeekNumber(project.startDate, day.date);
+    const week = teachingWeekNumber(project.startDate, day.date, project.weekStart ?? 7);
     const key = `${week}:${day.date.slice(0, 7)}`;
     groups.set(key, [...(groups.get(key) ?? []), day]);
   }
@@ -33,9 +33,9 @@ export function buildWorkPlanView(input: {
     const first = days[0].date; const last = days[days.length - 1].date;
     const weekLessons = [...(lessonsByWeek.get(weekNumber) ?? [])].sort((a, b) => a.date.localeCompare(b.date) || a.period - b.period);
     const uniqueTasks = [...new Map(weekLessons.map(lesson => [lesson.taskId, lesson.taskTitle])).values()];
-    const daysByWeekday = new Map(days.map(day => [new Date(`${day.date}T00:00:00Z`).getUTCDay(), day]));
-    const dates = Array.from({ length: 7 }, (_, index) => {
-      const day = daysByWeekday.get(index);
+    const daysByWeekday = new Map(days.map(day => [day.weekday, day]));
+    const dates = orderedWeekdays(project.weekStart ?? 7).map(weekday => {
+      const day = daysByWeekday.get(weekday);
       return day ? { day: Number(day.date.slice(8)), date: day.date } : null;
     });
     const visibleAnnotations = annotations.filter(item => item.startDate <= last && item.endDate >= first);

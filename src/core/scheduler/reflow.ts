@@ -16,7 +16,7 @@ export function rescheduleAfterPostponement(input: SchedulerInput, current: Sche
   const remainingByTask = new Map<string, number[]>();
   for (const lesson of remaining) remainingByTask.set(lesson.taskId, [...(remainingByTask.get(lesson.taskId) ?? []), lesson.taskPeriodIndex]);
   for (const values of remainingByTask.values()) values.sort((a, b) => a - b);
-  const cutoffWeek = teachingWeekNumber(input.project.startDate, cutoff);
+  const cutoffWeek = teachingWeekNumber(input.project.startDate, cutoff, input.project.weekStart ?? 7);
   const adjusted: SchedulerInput = {
     ...input,
     calendarDays: input.calendarDays.map(day => day.date <= cutoff ? { ...day, dayType: 'unavailable' } : day),
@@ -35,7 +35,7 @@ export function rescheduleAfterPostponement(input: SchedulerInput, current: Sche
     const original = input.tasks.find(task => task.id === lesson.taskId)!;
     return { ...lesson, taskPeriodIndex: remainingByTask.get(lesson.taskId)![index], plannedPeriods: original.plannedPeriods };
   });
-  const lessons: DraftLesson[] = [...keep.map(({ taskId, date, weekNumber, period, taskPeriodIndex, plannedPeriods }) => ({ taskId, date, weekNumber, period, taskPeriodIndex, plannedPeriods })), ...future]
+  const lessons: DraftLesson[] = [...keep.map(({ taskId, date, weekNumber, period, taskPeriodIndex, plannedPeriods, sharedSlotLabel, sharedOccurrences }) => ({ taskId, date, weekNumber, period, taskPeriodIndex, plannedPeriods, sharedSlotLabel, sharedOccurrences })), ...future]
     .sort((a, b) => a.date.localeCompare(b.date) || a.period - b.period);
   return { cutoff, result: { ...recalculated, lessons, weeks: buildScheduledWeeks(input.project, lessons) } };
 }

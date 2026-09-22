@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Link, useParams } from 'react-router-dom';
-import { dateFromTimestamp, parseLocalDate } from '../core/calendar/dates';
+import { dateFromTimestamp, orderedWeekdays, startOfTeachingWeek } from '../core/calendar/dates';
 import { compactTitles } from '../core/plan/summary';
 import { buildScheduledWeeks, type DraftLesson } from '../core/scheduler';
 import { confirmScheduleDraft, createRescheduleDraft, createScheduleDraft, type ScheduleDraft } from '../db/repositories/plans';
@@ -34,6 +34,7 @@ export function PlanPage() {
     () => currentVersion ? db.scheduledLessons.where('planVersionId').equals(currentVersion.id).toArray() : Promise.resolve([] as ScheduledLesson[]),
     [currentVersion?.id],
   );
+  const displayWeekStart = draft ? (project?.weekStart ?? 7) : (selectedVersion?.weekStart ?? project?.weekStart ?? 7);
 
   async function generate() {
     setBusy(true); setError('');
@@ -62,14 +63,20 @@ export function PlanPage() {
 
   const lessonRows: DraftLesson[] = draft ? draft.result.lessons : savedLessons;
   const sortedLessons = [...lessonRows].sort((a, b) => a.date.localeCompare(b.date) || a.period - b.period);
-  const weeks = draft ? draft.result.weeks : buildScheduledWeeks(project, sortedLessons);
+  const weeks = draft ? draft.result.weeks : buildScheduledWeeks({ ...project, weekStart: displayWeekStart }, sortedLessons);
   const taskTitles = new Map(tasks.map(task => [task.id, task.title]));
   const tasksById = new Map(tasks.map(task => [task.id, task]));
   const snapshotTitles = new Map(savedLessons.map(lesson => [lesson.taskId, lesson.taskTitle]));
   const titleOf = (lesson: DraftLesson) => draft ? (taskTitles.get(lesson.taskId) ?? lesson.taskId) : (snapshotTitles.get(lesson.taskId) ?? lesson.taskId);
   const weekTitle = (ids: string[]) => compactTitles(ids.map(id => draft ? (taskTitles.get(id) ?? id) : (snapshotTitles.get(id) ?? id)));
   const byDate = new Map<string, DraftLesson[]>();
-  for (const lesson of sortedLessons) byDate.set(lesson.date, [...(byDate.get(lesson.date) ?? []), lesson]);
+  for (const lesson of sortedLessons) {
+    const occurrences = lesson.sharedOccurrences?.length ? lesson.sharedOccurrences : [{ date: lesson.date, period: lesson.period }];
+    for (const occurrence of occurrences) {
+      const displayed = { ...lesson, date: occurrence.date, period: occurrence.period };
+      byDate.set(occurrence.date, [...(byDate.get(occurrence.date) ?? []), displayed]);
+    }
+  }
 
   return <main className="workspace plan-workspace"><Link className="back-link" to={`/projects/${projectId}`}>← 返回项目概览</Link>
     <div className="page-heading"><div><p className="eyebrow">{project.grade}{project.subject} · {project.semester}</p><h1>教学计划</h1><p className="muted">由校历、学科课表和任务队列计算；确认后形成不可变计划版本。</p></div><div className="header-actions">{currentVersion && <button className="button secondary" onClick={() => void generateAfterPostponement()} disabled={busy}>延期后顺延</button>}<button className="button primary" onClick={() => void generate()} disabled={busy || tasks.length === 0}>{busy ? '计算中…' : currentVersion ? '全部重新排程' : '生成排课草案'}</button></div></div>
@@ -85,13 +92,12 @@ export function PlanPage() {
     </section>}
     {!draft && versions.length > 0 && <div className="plan-controls"><label>计划版本 <select value={selectedVersion?.id ?? ''} onChange={event => setSelectedId(event.target.value)}>{versions.map(version => <option key={version.id} value={version.id}>V{version.version} · {version.reason} · {new Date(version.createdAt).toLocaleDateString('zh-CN')}</option>)}</select></label><span>历史版本只读保存</span></div>}
     {(draft || selectedVersion) && <section className="section-panel"><div className="view-tabs"><button className={view === 'week' ? 'active' : ''} onClick={() => setView('week')}>周计划</button><button className={view === 'calendar' ? 'active' : ''} onClick={() => setView('calendar')}>日历</button></div>
-      {view === 'week' ? <div className="table-scroll"><table className="data-table plan-table"><thead><tr><th>周次</th><th>日期</th><th>工作安排</th><th>课时</th></tr></thead><tbody>{weeks.map(week => <tr key={week.weekNumber}><td>第 {week.weekNumber} 周</td><td>{week.startDate} 至 {week.endDate}</td><td>{weekTitle(week.taskIds) || '—'}<div className="week-exam-links">{week.taskIds.flatMap(id => { const task = tasksById.get(id); return task?.examId ? [<Link key={id} to={`/projects/${projectId}/exams/${task.examId}`}>📎 {task.title} 考试资源</Link>] : []; })}</div></td><td>{week.lessonCount}</td></tr>)}</tbody></table></div> : <div className="calendar-grid"><div className="calendar-weekday">日</div><div className="calendar-weekday">一</div><div className="calendar-weekday">二</div><div className="calendar-weekday">三</div><div className="calendar-weekday">四</div><div className="calendar-weekday">五</div><div className="calendar-weekday">六</div>{weeks.flatMap(week => {
-        const start = parseLocalDate(week.startDate);
-        const sunday = start - new Date(start).getUTCDay() * 86_400_000;
+      {view === 'week' ? <div className="table-scroll"><table className="data-table plan-table"><thead><tr><th>周次</th><th>日期</th><th>工作安排</th><th>课时</th></tr></thead><tbody>{weeks.map(week => <tr key={week.weekNumber}><td>第 {week.weekNumber} 周</td><td>{week.startDate} 至 {week.endDate}</td><td>{weekTitle(week.taskIds) || '—'}<div className="week-exam-links">{week.taskIds.flatMap(id => { const task = tasksById.get(id); return task?.examId ? [<Link key={id} to={`/projects/${projectId}/exams/${task.examId}`}>📎 {task.title} 考试资源</Link>] : []; })}</div></td><td>{week.lessonCount}</td></tr>)}</tbody></table></div> : <div className="calendar-grid">{orderedWeekdays(displayWeekStart).map(day => <div className="calendar-weekday" key={day}>{['','一','二','三','四','五','六','日'][day]}</div>)}{weeks.flatMap(week => {
+        const weekStart = startOfTeachingWeek(week.startDate, displayWeekStart);
         return Array.from({ length: 7 }, (_, index) => {
-          const date = dateFromTimestamp(sunday + index * 86_400_000);
+          const date = dateFromTimestamp(weekStart + index * 86_400_000);
           const active = date >= project.startDate && date <= project.endDate;
-          return <div key={date} className={`calendar-cell ${active ? '' : 'outside'}`}><span className="calendar-date">{active ? date.slice(5) : ''}</span>{active && (byDate.get(date) ?? []).map(lesson => <div key={`${lesson.taskId}-${lesson.taskPeriodIndex}`} className="calendar-lesson">第{lesson.period}节 · {titleOf(lesson)}</div>)}</div>;
+          return <div key={date} className={`calendar-cell ${active ? '' : 'outside'}`}><span className="calendar-date">{active ? date.slice(5) : ''}</span>{active && (byDate.get(date) ?? []).map(lesson => <div key={`${lesson.taskId}-${lesson.taskPeriodIndex}`} className="calendar-lesson">第{lesson.period}节 · {titleOf(lesson)}{lesson.sharedSlotLabel ? ` · ${lesson.sharedSlotLabel}` : ''}</div>)}</div>;
         });
       })}</div>}
     </section>}

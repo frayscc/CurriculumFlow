@@ -2,9 +2,11 @@ import { useMemo, useState, type FormEvent } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Link, useParams } from 'react-router-dom';
 import { availablePeriods, buildTeachingSlots, parsePeriods } from '../core/calendar/availability';
+import { orderedWeekdays, weekdayOf } from '../core/calendar/dates';
 import { applyCalendarRange, deleteScheduleOverride, setCourseSchedule, setScheduleOverride, updateCalendarDay } from '../db/repositories/calendar';
+import { updateCalendarPreferences } from '../db/repositories/projects';
 import { db } from '../db/schema';
-import type { CalendarDay, DayType, ScheduleOverride, Weekday } from '../types/domain';
+import type { CalendarDay, DayType, ScheduleOverride, SharedCourseSlot, Weekday } from '../types/domain';
 
 const weekdayNames = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
 const dayTypes: Array<[DayType, string]> = [
@@ -59,6 +61,10 @@ function localDate(year: number, month: number, day: number) {
   return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
 
+function sharedMemberText(member: SharedCourseSlot['members'][number]) {
+  return `${weekdayNames[member.weekday - 1]}第 ${member.period} 节`;
+}
+
 export function CalendarPage() {
   const { projectId = '' } = useParams();
   const project = useLiveQuery(() => db.projects.get(projectId), [projectId]);
@@ -76,6 +82,11 @@ export function CalendarPage() {
   const [rangeWeekday, setRangeWeekday] = useState<Weekday>(5);
   const [selectedDate, setSelectedDate] = useState('');
   const [pickingRange, setPickingRange] = useState(false);
+  const [sharedLabel, setSharedLabel] = useState('周三/周四共享');
+  const [sharedWeekdayA, setSharedWeekdayA] = useState<Weekday>(3);
+  const [sharedPeriodA, setSharedPeriodA] = useState('');
+  const [sharedWeekdayB, setSharedWeekdayB] = useState<Weekday>(4);
+  const [sharedPeriodB, setSharedPeriodB] = useState('');
   const [error, setError] = useState('');
   const activeMonth = month || project?.startDate.slice(0, 7) || '';
   const months = useMemo(() => [...new Set((days ?? []).map(day => day.date.slice(0, 7)))], [days]);
@@ -85,15 +96,19 @@ export function CalendarPage() {
     if (!activeMonth) return [] as Array<string | null>;
     const [year, monthNumber] = activeMonth.split('-').map(Number);
     const count = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
-    const firstWeekday = new Date(Date.UTC(year, monthNumber - 1, 1)).getUTCDay();
-    const mondayOffset = (firstWeekday + 6) % 7;
-    const cells: Array<string | null> = Array(mondayOffset).fill(null);
+    const firstDate = localDate(year, monthNumber, 1);
+    const weekStart = project?.weekStart ?? 7;
+    const offset = (weekdayOf(firstDate) - weekStart + 7) % 7;
+    const cells: Array<string | null> = Array(offset).fill(null);
     for (let day = 1; day <= count; day++) cells.push(localDate(year, monthNumber, day));
     while (cells.length % 7) cells.push(null);
     return cells;
-  }, [activeMonth]);
+  }, [activeMonth, project?.weekStart]);
   const selectedDay = selectedDate ? dayByDate.get(selectedDate) : undefined;
-  const slotCount = project && days && schedules && overrides ? buildTeachingSlots(project.startDate, days, schedules, overrides).length : undefined;
+  const slotCount = project && days && schedules && overrides ? buildTeachingSlots(project.startDate, days, schedules, overrides, {
+    weekStart: project.weekStart ?? 7, sharedCourseSlots: project.sharedCourseSlots ?? [],
+  }).length : undefined;
+  const calendarWeekdays = orderedWeekdays(project?.weekStart ?? 7);
 
   async function addOverride(event: FormEvent) {
     event.preventDefault();
@@ -133,23 +148,51 @@ export function CalendarPage() {
     if (next) { setMonth(next); setSelectedDate(''); }
   }
 
+  async function changeWeekStart(value: Weekday) {
+    try { await updateCalendarPreferences(projectId, value, project?.sharedCourseSlots ?? []); setError(''); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : '一周起始日保存失败。'); }
+  }
+
+  async function addSharedSlot(event: FormEvent) {
+    event.preventDefault();
+    const periodA = Number(sharedPeriodA); const periodB = Number(sharedPeriodB);
+    if (!schedules?.some(row => row.weekday === sharedWeekdayA && row.periods.includes(periodA)) || !schedules?.some(row => row.weekday === sharedWeekdayB && row.periods.includes(periodB))) {
+      setError('共享课位必须选择已在每周课表中设置的星期和节次。'); return;
+    }
+    try {
+      const group: SharedCourseSlot = { id: crypto.randomUUID(), label: sharedLabel.trim(), members: [{ weekday: sharedWeekdayA, period: periodA }, { weekday: sharedWeekdayB, period: periodB }] };
+      await updateCalendarPreferences(projectId, project?.weekStart ?? 7, [...(project?.sharedCourseSlots ?? []), group]);
+      setSharedPeriodA(''); setSharedPeriodB(''); setError('');
+    } catch (caught) { setError(caught instanceof Error ? caught.message : '共享课位保存失败。'); }
+  }
+
+  async function removeSharedSlot(id: string) {
+    try { await updateCalendarPreferences(projectId, project?.weekStart ?? 7, (project?.sharedCourseSlots ?? []).filter(group => group.id !== id)); setError(''); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : '共享课位移除失败。'); }
+  }
+
   if (project === undefined || !days || !schedules || !overrides) return <main className="workspace">正在读取校历与课表…</main>;
   if (!project) return <main className="workspace"><Link to="/">返回项目列表</Link><h1>项目不存在</h1></main>;
   return <main className="workspace calendar-workspace">
     <Link to={`/projects/${projectId}`} className="back-link">← 返回项目概览</Link>
     <div className="page-heading"><div><p className="eyebrow">{project.grade}{project.subject} · {project.semester}</p><h1>校历与课表</h1><p className="muted">特殊日期、每周固定课时和临时调整自动保存到本机。</p></div><div className="slot-summary"><strong>{slotCount ?? '…'}</strong><span>学期可用课时</span></div></div>
     {error && <p role="alert" className="error page-error">{error}</p>}
-    <section className="section-panel calendar-section"><div className="section-heading"><div><h2>每周学科课表</h2><p>填写节次，多个节次用逗号分隔；留空表示当天没有本学科课。</p></div></div><div className="schedule-grid">{([1,2,3,4,5,6,7] as Weekday[]).map(weekday => <CourseRow key={weekday} projectId={projectId} weekday={weekday} periods={schedules.find(row => row.weekday === weekday)?.periods ?? []} onError={setError} />)}</div></section>
+    <section className="section-panel calendar-section"><div className="section-heading"><div><h2>每周学科课表</h2><p>填写真实上课节次。不同班级在不同日期完成同一进度时，可在下方合并为一个共享课位。</p></div><label className="week-start-setting">一周开始于<select value={project.weekStart ?? 7} onChange={event => void changeWeekStart(Number(event.target.value) as Weekday)}>{([1,2,3,4,5,6,7] as Weekday[]).map(weekday => <option key={weekday} value={weekday}>{weekdayNames[weekday - 1]}</option>)}</select></label></div><div className="schedule-grid">{([1,2,3,4,5,6,7] as Weekday[]).map(weekday => <CourseRow key={weekday} projectId={projectId} weekday={weekday} periods={schedules.find(row => row.weekday === weekday)?.periods ?? []} onError={setError} />)}</div>
+      <p className="calendar-preference-hint">一周起始日和共享课位会用于下一次生成教学计划；已经确认的计划版本保持不变。</p>
+      <div className="shared-slots"><div className="shared-slots-heading"><div><h3>共享教学进度课位</h3><p>例如三个班中两个班周三上课、另一个班周四上同一内容：把这两个真实课位合并后，每周只计 1 课时。</p></div><span>{project.sharedCourseSlots?.length ?? 0} 组</span></div>{(project.sharedCourseSlots ?? []).map(group => <div className="shared-slot-row" key={group.id}><strong>{group.label}</strong><span>{group.members.map(sharedMemberText).join(' ＋ ')}</span><span>合并计算为 1 课时</span><button type="button" className="text-button" onClick={() => void removeSharedSlot(group.id)}>移除</button></div>)}<form className="shared-slot-form" onSubmit={addSharedSlot}><label>名称<input value={sharedLabel} onChange={event => setSharedLabel(event.target.value)} required /></label><label>第一个课位<select value={sharedWeekdayA} onChange={event => setSharedWeekdayA(Number(event.target.value) as Weekday)}>{([1,2,3,4,5,6,7] as Weekday[]).map(day => <option key={day} value={day}>{weekdayNames[day - 1]}</option>)}</select><input type="number" min="1" max="20" value={sharedPeriodA} onChange={event => setSharedPeriodA(event.target.value)} placeholder="节次" required /></label><label>第二个课位<select value={sharedWeekdayB} onChange={event => setSharedWeekdayB(Number(event.target.value) as Weekday)}>{([1,2,3,4,5,6,7] as Weekday[]).map(day => <option key={day} value={day}>{weekdayNames[day - 1]}</option>)}</select><input type="number" min="1" max="20" value={sharedPeriodB} onChange={event => setSharedPeriodB(event.target.value)} placeholder="节次" required /></label><button className="button secondary" type="submit">添加共享课位</button></form></div>
+    </section>
     <section className="section-panel calendar-section visual-calendar-section">
       <div className="calendar-toolbar"><div><h2>学期校历</h2><p>点击某一天进行标注；开启“选择日期范围”后，再依次点击开始和结束日期。</p></div><div className="month-switcher"><button type="button" aria-label="上个月" disabled={months.indexOf(activeMonth) <= 0} onClick={() => moveMonth(-1)}>←</button><select aria-label="选择月份" value={activeMonth} onChange={event => { setMonth(event.target.value); setSelectedDate(''); }}>{months.map(value => <option key={value} value={value}>{value.replace('-', ' 年 ')} 月</option>)}</select><button type="button" aria-label="下个月" disabled={months.indexOf(activeMonth) >= months.length - 1} onClick={() => moveMonth(1)}>→</button></div></div>
       <div className="calendar-legend">{dayTypes.map(([value, label]) => <span key={value}><i className={`legend-dot ${value}`} />{label}</span>)}</div>
-      <div className="term-calendar"><div className="term-weekdays">{weekdayNames.map(name => <span key={name}>{name}</span>)}</div><div className="term-calendar-grid">{calendarCells.map((date, index) => {
+      <div className="term-calendar"><div className="term-weekdays">{calendarWeekdays.map(day => <span key={day}>{weekdayNames[day - 1]}</span>)}</div><div className="term-calendar-grid">{calendarCells.map((date, index) => {
         if (!date) return <span className="term-day blank" key={`blank-${index}`} />;
         const day = dayByDate.get(date);
         const isRange = !!rangeStart && date >= rangeStart && date <= (rangeEnd || rangeStart);
         if (!day) return <span className="term-day outside" key={date}><span>{dateParts(date).day}</span></span>;
         const periods = availablePeriods(day, schedules, overrideByDate.get(date));
-        return <button type="button" key={date} className={`term-day ${day.dayType} ${selectedDate === date ? 'selected' : ''} ${isRange ? 'in-range' : ''}`} onClick={() => selectCalendarDate(date)}><span className="day-number">{dateParts(date).day}</span><span className="day-kind">{dayTypes.find(([value]) => value === day.dayType)?.[1]}</span>{day.title && <strong>{day.title}</strong>}<small>{periods.length ? `${periods.length} 课时` : '无课'}{overrideByDate.has(date) ? ' · 已调整' : ''}</small></button>;
+        const scheduleWeekday = day.dayType === 'makeup_workday' && day.scheduleWeekday ? day.scheduleWeekday : day.weekday;
+        const sharedLabels = [...new Set((project.sharedCourseSlots ?? []).filter(group => group.members.some(member => member.weekday === scheduleWeekday && periods.includes(member.period))).map(group => group.label))];
+        return <button type="button" key={date} className={`term-day ${day.dayType} ${selectedDate === date ? 'selected' : ''} ${isRange ? 'in-range' : ''}`} onClick={() => selectCalendarDate(date)}><span className="day-number">{dateParts(date).day}</span><span className="day-kind">{dayTypes.find(([value]) => value === day.dayType)?.[1]}</span>{day.title && <strong>{day.title}</strong>}{sharedLabels.map(label => <em key={label}>共享 · {label}</em>)}<small>{periods.length ? `${periods.length} 个真实课位` : '无课'}{overrideByDate.has(date) ? ' · 已调整' : ''}</small></button>;
       })}</div></div>
       <div className="calendar-edit-layout"><form className={`range-form calendar-range-form ${pickingRange ? 'picking' : ''}`} onSubmit={applyRange}><div className="range-form-heading"><strong>批量标注</strong><button type="button" className={`button ${pickingRange ? 'primary' : 'secondary'}`} onClick={() => { setPickingRange(value => !value); setRangeStart(''); setRangeEnd(''); }}>{pickingRange ? '正在选择日期…' : '选择日期范围'}</button></div><label>从<input aria-label="范围开始日期" type="date" min={project.startDate} max={project.endDate} value={rangeStart} onChange={event => setRangeStart(event.target.value)} required /></label><label>至<input aria-label="范围结束日期" type="date" min={project.startDate} max={project.endDate} value={rangeEnd} onChange={event => setRangeEnd(event.target.value)} required /></label><label>设为<select aria-label="范围日期类型" value={rangeType} onChange={event => setRangeType(event.target.value as DayType)}>{dayTypes.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>{rangeType === 'makeup_workday' && <label>执行课表<select aria-label="范围执行课表" value={rangeWeekday} onChange={event => setRangeWeekday(Number(event.target.value) as Weekday)}>{weekdayNames.map((label, index) => <option key={label} value={index + 1}>{label}</option>)}</select></label>}<label>名称<input aria-label="范围名称" value={rangeTitle} onChange={event => setRangeTitle(event.target.value)} placeholder="例如 国庆节" /></label><button className="button primary" type="submit">应用到所选日期</button></form>{selectedDay ? <DayEditor key={selectedDay.date} day={selectedDay} override={overrideByDate.get(selectedDay.date)} periods={availablePeriods(selectedDay, schedules, overrideByDate.get(selectedDay.date))} onError={setError} /> : <aside className="day-editor empty-day-editor"><strong>选择一个日期</strong><p>点击上方日历中的日期，即可设置节假日、调休、考试、活动或停课。</p></aside>}</div>
     </section>

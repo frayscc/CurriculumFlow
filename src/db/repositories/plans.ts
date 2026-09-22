@@ -28,7 +28,10 @@ async function readInput(projectId: string, database: CurriculumDatabase): Promi
     database.scheduleOverrides.where('projectId').equals(projectId).toArray(),
     database.teachingTasks.where('projectId').equals(projectId).toArray(),
   ]);
-  return { project: { startDate: project.startDate, endDate: project.endDate }, calendarDays, courseSchedules, scheduleOverrides, tasks };
+  return { project: {
+    startDate: project.startDate, endDate: project.endDate,
+    weekStart: project.weekStart ?? 7, sharedCourseSlots: project.sharedCourseSlots ?? [],
+  }, calendarDays, courseSchedules, scheduleOverrides, tasks };
 }
 
 export interface ScheduleDraft { inputFingerprint: string; result: ScheduleResult; kind?: 'reflow'; sourceVersionId?: string; sourceSignature?: string; cutoff?: string; }
@@ -81,6 +84,7 @@ export async function confirmScheduleDraft(projectId: string, draft: ScheduleDra
     const version: PlanVersion = {
       id, projectId, version: (previous?.version ?? 0) + 1, createdAt: new Date().toISOString(),
       reason: reason.trim(), scheduleSnapshot: snapshot, inputFingerprint: draft.inputFingerprint,
+      weekStart: input.project.weekStart ?? 7,
     };
     const rows: ScheduledLesson[] = snapshot.map(lesson => ({ ...lesson, projectId, planVersionId: id }));
     await database.planVersions.add(version);

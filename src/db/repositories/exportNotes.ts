@@ -12,7 +12,7 @@ async function validateRange(projectId: string, startDate: string, endDate: stri
 
 export async function setWeeklyNote(projectId: string, weekNumber: number, note: string, database = appDb) {
   const project = await database.projects.get(projectId);
-  if (!project || weekNumber < 1 || weekNumber > teachingWeekNumber(project.startDate, project.endDate)) throw new Error('教学周无效。');
+  if (!project || weekNumber < 1 || weekNumber > teachingWeekNumber(project.startDate, project.endDate, project.weekStart ?? 7)) throw new Error('教学周无效。');
   const old = await database.weeklyNotes.get([projectId, weekNumber]);
   await database.weeklyNotes.put({ ...old, projectId, weekNumber, note: note.trim(), updatedAt: new Date().toISOString() });
 }

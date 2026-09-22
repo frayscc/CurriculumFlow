@@ -1,9 +1,11 @@
-import type { CalendarDay, CourseSchedule, ScheduleOverride, Weekday } from '../../types/domain';
+import type { CalendarDay, CourseSchedule, ScheduleOverride, SharedCourseSlot, Weekday } from '../../types/domain';
 import { teachingWeekNumber } from './dates';
 
 export interface TeachingSlot {
   date: string; weekNumber: number; period: number;
   source: 'weekly' | 'makeup' | 'override';
+  sharedSlotId?: string; sharedSlotLabel?: string;
+  occurrences?: Array<{ date: string; period: number }>;
 }
 
 export function normalizePeriods(periods: number[]): number[] {
@@ -39,13 +41,35 @@ export function availablePeriods(
 
 export function buildTeachingSlots(
   startDate: string, days: CalendarDay[], schedules: CourseSchedule[], overrides: ScheduleOverride[],
+  options: { weekStart?: Weekday; sharedCourseSlots?: SharedCourseSlot[] } = {},
 ): TeachingSlot[] {
   const overrideByDate = new Map(overrides.map(override => [override.date, override]));
-  return [...days].sort((a, b) => a.date.localeCompare(b.date)).flatMap(day => {
+  const sharedMember = new Map<string, SharedCourseSlot>();
+  for (const group of options.sharedCourseSlots ?? []) {
+    for (const member of group.members) sharedMember.set(`${member.weekday}:${member.period}`, group);
+  }
+  const raw = [...days].sort((a, b) => a.date.localeCompare(b.date)).flatMap(day => {
     const override = overrideByDate.get(day.date);
     const source = override ? 'override' : day.dayType === 'makeup_workday' ? 'makeup' : 'weekly';
-    return availablePeriods(day, schedules, override).map(period => ({
-      date: day.date, weekNumber: teachingWeekNumber(startDate, day.date), period, source,
-    }));
+    const scheduleWeekday = day.dayType === 'makeup_workday' && day.scheduleWeekday ? day.scheduleWeekday : day.weekday;
+    return availablePeriods(day, schedules, override).map(period => {
+      const shared = sharedMember.get(`${scheduleWeekday}:${period}`);
+      return {
+        date: day.date, weekNumber: teachingWeekNumber(startDate, day.date, options.weekStart ?? 7), period, source,
+        sharedSlotId: shared?.id, sharedSlotLabel: shared?.label,
+        occurrences: shared ? [{ date: day.date, period }] : undefined,
+      } satisfies TeachingSlot;
+    });
   });
+  const result: TeachingSlot[] = [];
+  const grouped = new Map<string, TeachingSlot>();
+  for (const slot of raw) {
+    if (!slot.sharedSlotId) { result.push(slot); continue; }
+    const key = `${slot.weekNumber}:${slot.sharedSlotId}`;
+    const existing = grouped.get(key);
+    if (!existing) { grouped.set(key, slot); result.push(slot); continue; }
+    existing.occurrences = [...(existing.occurrences ?? [{ date: existing.date, period: existing.period }]), { date: slot.date, period: slot.period }]
+      .sort((a, b) => a.date.localeCompare(b.date) || a.period - b.period);
+  }
+  return result.sort((a, b) => a.date.localeCompare(b.date) || a.period - b.period);
 }

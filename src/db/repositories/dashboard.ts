@@ -36,7 +36,10 @@ export async function readProjectDashboard(projectId: string, today: string, dat
     database.changeLogs.where('projectId').equals(projectId).toArray(),
     database.settings.where('projectId').equals(projectId).toArray(),
   ]);
-  const currentWeek = today < project.startDate ? 0 : today > project.endDate ? teachingWeekNumber(project.startDate, project.endDate) + 1 : teachingWeekNumber(project.startDate, today);
+  const weekStart = version?.weekStart ?? project.weekStart ?? 7;
+  const currentWeek = today < project.startDate ? 0 : today > project.endDate
+    ? teachingWeekNumber(project.startDate, project.endDate, weekStart) + 1
+    : teachingWeekNumber(project.startDate, today, weekStart);
   const thisWeek = lessons.filter(lesson => lesson.weekNumber === currentWeek).sort((a, b) => a.date.localeCompare(b.date) || a.period - b.period);
   const allLessonById = new Map(allLessons.map(lesson => [lesson.id, lesson]));
   const completedKeys = new Set(actuals.filter(row => row.status === 'completed').map(row => {

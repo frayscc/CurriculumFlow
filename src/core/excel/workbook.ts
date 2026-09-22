@@ -1,8 +1,9 @@
 import ExcelJS from 'exceljs';
 import type { CalendarDay, SemesterProject } from '../../types/domain';
+import { orderedWeekdays } from '../calendar/dates';
 import type { WorkPlanRow } from './planView';
 
-const headers = ['月份', '周次', '日', '一', '二', '三', '四', '五', '六', '工作安排', '课时', '备注', '单元检测', '物理专训'];
+const weekdayHeaders = ['', '一', '二', '三', '四', '五', '六', '日'];
 const chineseWeeks = ['', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十', '十一', '十二', '十三', '十四', '十五', '十六', '十七', '十八', '十九', '二十', '二一'];
 const border: Partial<ExcelJS.Borders> = {
   top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' },
@@ -18,7 +19,8 @@ export async function buildWorkPlanXlsx(project: SemesterProject, rows: WorkPlan
   });
   const widths = [5.66, 5.66, 4, 8.43, 8.43, 8.43, 8.43, 8.43, 8.43, 64.66, 5.66, 25.33, 53.33, 9.33];
   widths.forEach((width, index) => { sheet.getColumn(index + 1).width = width; });
-  sheet.getRow(1).values = headers;
+  const weekdays = orderedWeekdays(project.weekStart ?? 7);
+  sheet.getRow(1).values = ['月份', '周次', ...weekdays.map(day => weekdayHeaders[day]), '工作安排', '课时', '备注', '单元检测', '物理专训'];
   const dayByDate = new Map(calendarDays.map(day => [day.date, day]));
   rows.forEach((entry, index) => {
     const row = sheet.getRow(index + 2);
@@ -27,12 +29,12 @@ export async function buildWorkPlanXlsx(project: SemesterProject, rows: WorkPlan
       entry.note, entry.assessment, entry.specialTraining];
     const longest = Math.max(entry.content.length / 30, entry.note.length / 16, entry.assessment.length / 30);
     row.height = Math.min(80, Math.max(22, 20 + Math.ceil(longest) * 13));
-    entry.dates.forEach((day, weekday) => {
+    entry.dates.forEach((day, weekdayIndex) => {
       if (!day) return;
-      const cell = row.getCell(weekday + 3);
+      const cell = row.getCell(weekdayIndex + 3);
       const calendar = dayByDate.get(day.date);
       if (calendar?.dayType === 'makeup_workday') cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFF00' } };
-      else if (weekday === 0 || weekday === 6 || calendar?.dayType === 'holiday' || calendar?.dayType === 'unavailable') cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFABF8F' } };
+      else if (weekdays[weekdayIndex] >= 6 || calendar?.dayType === 'holiday' || calendar?.dayType === 'unavailable') cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFABF8F' } };
       if (calendar?.dayType === 'exam') cell.font = { name: '宋体', size: 11, color: { argb: 'FFFF0000' } };
     });
   });

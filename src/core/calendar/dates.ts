@@ -32,9 +32,17 @@ export function generateCalendarDays(projectId: string, startDate: LocalDate, en
   return days;
 }
 
-export function teachingWeekNumber(startDate: LocalDate, date: LocalDate): number {
+export function teachingWeekNumber(startDate: LocalDate, date: LocalDate, weekStart: Weekday = 7): number {
   const start = parseLocalDate(startDate);
   const current = parseLocalDate(date);
-  const startSundayOffset = new Date(start).getUTCDay();
-  return Math.floor((current - start + startSundayOffset * DAY_MS) / (7 * DAY_MS)) + 1;
+  const startOffset = (weekdayOf(startDate) - weekStart + 7) % 7;
+  return Math.floor((current - start + startOffset * DAY_MS) / (7 * DAY_MS)) + 1;
+}
+
+export function startOfTeachingWeek(date: LocalDate, weekStart: Weekday = 7): number {
+  return parseLocalDate(date) - ((weekdayOf(date) - weekStart + 7) % 7) * DAY_MS;
+}
+
+export function orderedWeekdays(weekStart: Weekday = 7): Weekday[] {
+  return Array.from({ length: 7 }, (_, index) => ((weekStart - 1 + index) % 7 + 1) as Weekday);
 }
