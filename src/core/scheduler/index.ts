@@ -3,7 +3,7 @@ import { dateFromTimestamp, generateCalendarDays, parseLocalDate, startOfTeachin
 import type { CalendarDay, CourseSchedule, ScheduleOverride, SemesterProject, TeachingTask } from '../../types/domain';
 
 export interface SchedulerInput {
-  project: Pick<SemesterProject, 'startDate' | 'endDate' | 'weekStart' | 'sharedCourseSlots'>;
+  project: Pick<SemesterProject, 'startDate' | 'endDate' | 'weekStart' | 'sharedCourseSlots' | 'weeklyProgressSlots'>;
   calendarDays: CalendarDay[];
   courseSchedules: CourseSchedule[];
   scheduleOverrides: ScheduleOverride[];
@@ -116,6 +116,15 @@ export function schedule(input: SchedulerInput): ScheduleResult {
         sharedMembers.add(key);
       }
     }
+    const progressWeekdays = new Set<number>();
+    for (const slot of project.weeklyProgressSlots ?? []) {
+      if (!slot.id || !slot.label.trim() || !slot.weekdays.length) return invalid('每周教学进度配置无效。', tasks);
+      for (const weekday of slot.weekdays) {
+        if (weekday < 1 || weekday > 5 || progressWeekdays.has(weekday)) return invalid('每个工作日只能属于一个教学进度。', tasks);
+        progressWeekdays.add(weekday);
+      }
+    }
+    if (project.weeklyProgressSlots?.length && progressWeekdays.size !== 5) return invalid('每周教学进度必须覆盖周一至周五。', tasks);
     for (const row of scheduleOverrides) {
       if (!dates.has(row.date)) return invalid('日期覆盖超出学期范围。', tasks);
       normalizePeriods(row.actualPeriods);
@@ -127,6 +136,7 @@ export function schedule(input: SchedulerInput): ScheduleResult {
     const reserved = new Set(input.reservedSlots?.map(slot => `${slot.date}:${slot.period}`) ?? []);
     slots = buildTeachingSlots(project.startDate, calendarDays, courseSchedules, scheduleOverrides, {
       weekStart: project.weekStart ?? 7, sharedCourseSlots: project.sharedCourseSlots ?? [],
+      weeklyProgressSlots: project.weeklyProgressSlots,
     })
       .filter(slot => !reserved.has(`${slot.date}:${slot.period}`));
   }

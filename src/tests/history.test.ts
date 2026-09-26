@@ -20,7 +20,7 @@ describe('historical project reuse', () => {
     await setCourseSchedule(source.id, 5, [3], database);
     const exam = await createExam(source.id, { title: '单元检测', examType: 'chapter_test', examDate: '2026-09-18', authorNames: ['麦舒淇'], reviewerNames: ['谢丽璇'] }, database);
     await uploadExamFile(exam.id, 'paper_pdf', new Blob(['test']), '试卷.pdf', database);
-    const sourceTask = await createTask(source.id, { title: '13.1 分子热运动', type: 'new_lesson', plannedPeriods: 2, allowSplit: true, fixedDate: '2026-09-14' }, database);
+    const sourceTask = await createTask(source.id, { title: '13.1 分子热运动', type: 'new_lesson', plannedPeriods: 1, allowSplit: true, fixedDate: '2026-09-14' }, database);
     await createTask(source.id, { title: '单元检测', type: 'exam', plannedPeriods: 1, allowSplit: true, examId: exam.id }, database);
     const version = await confirmScheduleDraft(source.id, await createScheduleDraft(source.id, database), '原计划', database);
     await recordActual(version.scheduleSnapshot[0].id, { status: 'completed', actualPeriods: 1 }, database);
@@ -31,7 +31,7 @@ describe('historical project reuse', () => {
     expect(copy.sourceProjectId).toBe(source.id);
     const copiedTasks = await database.teachingTasks.where('projectId').equals(copy.id).sortBy('order');
     expect(copiedTasks).toHaveLength(2);
-    expect(copiedTasks[0]).toMatchObject({ plannedPeriods: 2, fixedDate: undefined });
+    expect(copiedTasks[0]).toMatchObject({ plannedPeriods: 1, fixedDate: undefined });
     expect(copiedTasks[0].id).not.toBe(sourceTask.id);
     expect(await database.calendarDays.where('projectId').equals(copy.id).count()).toBe(5);
     expect(await database.actualRecords.where('projectId').equals(copy.id).count()).toBe(0);

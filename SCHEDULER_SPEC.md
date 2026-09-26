@@ -6,7 +6,7 @@
 
 ```ts
 interface SchedulerInput {
-  project: Pick<SemesterProject, 'startDate' | 'endDate'>;
+  project: Pick<SemesterProject, 'startDate' | 'endDate' | 'weekStart' | 'weeklyProgressSlots'>;
   calendarDays: CalendarDay[];
   courseSchedules: CourseSchedule[];
   scheduleOverrides: ScheduleOverride[];
@@ -15,6 +15,7 @@ interface SchedulerInput {
 interface TeachingSlot {
   date: LocalDate; weekNumber: number; period: number;
   source: 'weekly' | 'makeup' | 'override';
+  occurrences?: Array<{ date: LocalDate; period: number }>;
 }
 interface ScheduleResult {
   slots: TeachingSlot[];
@@ -33,19 +34,19 @@ interface ScheduleResult {
 
 ## 1. 输入校验
 
-日期范围有效、每天恰有一条 `CalendarDay`；课表和覆盖节次为正整数且去重；任务标题非空、课时为正整数、`order` 唯一；`fixedDate` 与 `fixedWeek` 不共存；关联日期在学期范围；调休日有有效 `scheduleWeekday`。错误以结构化冲突返回，不发生部分写入。`fixedWeek` 从 1 起且不超过学期周数。
+日期范围有效、每天恰有一条 `CalendarDay`；每周教学进度完整覆盖周一至周五且工作日不重复；任务标题非空、课时为正整数、`order` 唯一；`fixedDate` 与 `fixedWeek` 不共存；关联日期在学期范围；周末上课日有有效 `scheduleWeekday`。错误以结构化冲突返回，不发生部分写入。`fixedWeek` 从 1 起且不超过学期周数。
 
 ## 2. 教学周与可用槽
 
-学期开始日期所在的周日至周六是第 1 周，即使开始日期是周二；下一个周日是第 2 周。现有 XLSX 的第 1 周是 2026-08-30 至 09-05（仅展示 09-01 起的日期），第 2 周从 09-06 开始。日期区间两端都包含。按日期升序逐日计算：
+学期开始日期所在的配置周是第 1 周，日期区间两端都包含。按日期升序逐日计算：
 
-1. `holiday`、`unavailable`：零槽；日期覆盖不能暗中恢复这些日期。
-2. `school_event`、`exam`：默认零槽；只有明确的 `ScheduleOverride.actualPeriods` 才可排学科课程。
-3. `makeup_workday`：取 `scheduleWeekday` 对应课表；允许周末；覆盖可替代。
-4. `normal`：周一至周五取自然星期的学科课表，周末默认零槽；若周末确需上课，以调休或明确日期覆盖表示。
-5. 对允许的日期，若有覆盖则以 `actualPeriods` 完全替代上述课表结果；空数组表示临时停课。按节次升序输出槽。
+1. `holiday`、`unavailable`、`school_event`、`exam`：零槽。
+2. `normal`：周一至周五按 `weeklyProgressSlots` 取得教学进度，周末零槽。
+3. `makeup_workday`：按 `scheduleWeekday` 取得教学进度，界面状态仍为“上课”。
+4. 同一教学周内，同一 `WeeklyProgressSlot` 的多个日期合并成一个逻辑课时，所有真实日期写入 `occurrences`。
+5. 默认 `[周三, 周四]` 因而只产生一个逻辑课时；其中一天放假时由另一天承载，两天都放假时才减少这个课时。
 
-覆盖有 `reason`，用于预览说明。星期课表无对应条目等价于零课时。计算槽时不以“工作日”替代“有学科课”。
+旧版具体节次课表仍作为兼容路径保留；新项目以每周教学进度作为排课输入。
 
 ## 3. 固定节点预留
 

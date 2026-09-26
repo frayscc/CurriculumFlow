@@ -35,6 +35,7 @@ export function PlanPage() {
     [currentVersion?.id],
   );
   const displayWeekStart = draft ? (project?.weekStart ?? 7) : (selectedVersion?.weekStart ?? project?.weekStart ?? 7);
+  const progressMode = draft ? true : selectedVersion?.scheduleMode === 'progress';
 
   async function generate() {
     setBusy(true); setError('');
@@ -68,6 +69,7 @@ export function PlanPage() {
   const tasksById = new Map(tasks.map(task => [task.id, task]));
   const snapshotTitles = new Map(savedLessons.map(lesson => [lesson.taskId, lesson.taskTitle]));
   const titleOf = (lesson: DraftLesson) => draft ? (taskTitles.get(lesson.taskId) ?? lesson.taskId) : (snapshotTitles.get(lesson.taskId) ?? lesson.taskId);
+  const positionOf = (lesson: DraftLesson, asProgress: boolean) => `${lesson.date} ${asProgress ? `计划课时${lesson.period}` : `第${lesson.period}节`}`;
   const weekTitle = (ids: string[]) => compactTitles(ids.map(id => draft ? (taskTitles.get(id) ?? id) : (snapshotTitles.get(id) ?? id)));
   const byDate = new Map<string, DraftLesson[]>();
   for (const lesson of sortedLessons) {
@@ -85,7 +87,7 @@ export function PlanPage() {
     {draft && <section className="section-panel plan-draft"><div className="draft-heading"><h2>排课草案</h2><span>{draft.result.lessons.length} / {draft.result.slots.length} 个课时已安排</span></div>
       {currentVersion && <p className="muted">与 V{currentVersion.version} 相比，{countMoved(currentLessons, draft.result.lessons)} 个课时的位置发生变化或新加入。</p>}
       {draft.kind === 'reflow' && <p className="muted">从 {draft.cutoff} 的延期课次开始顺延；已完成课次和此前计划保留在新版本中。</p>}
-      {currentVersion && <div className="table-scroll"><table className="data-table"><thead><tr><th>教学内容</th><th>原计划</th><th>调整后</th></tr></thead><tbody>{draft.result.lessons.filter(lesson => currentLessons.find(old => old.taskId === lesson.taskId && old.taskPeriodIndex === lesson.taskPeriodIndex)?.date !== lesson.date || currentLessons.find(old => old.taskId === lesson.taskId && old.taskPeriodIndex === lesson.taskPeriodIndex)?.period !== lesson.period).map(lesson => { const old = currentLessons.find(item => item.taskId === lesson.taskId && item.taskPeriodIndex === lesson.taskPeriodIndex); return <tr key={`${lesson.taskId}:${lesson.taskPeriodIndex}`}><td>{tasksById.get(lesson.taskId)?.title ?? lesson.taskId} · 第{lesson.taskPeriodIndex}课时</td><td>{old ? `${old.date} 第${old.period}节` : '新增'}</td><td>{lesson.date} 第{lesson.period}节</td></tr>; })}</tbody></table></div>}
+      {currentVersion && <div className="table-scroll"><table className="data-table"><thead><tr><th>教学内容</th><th>原计划</th><th>调整后</th></tr></thead><tbody>{draft.result.lessons.filter(lesson => currentLessons.find(old => old.taskId === lesson.taskId && old.taskPeriodIndex === lesson.taskPeriodIndex)?.date !== lesson.date || currentLessons.find(old => old.taskId === lesson.taskId && old.taskPeriodIndex === lesson.taskPeriodIndex)?.period !== lesson.period).map(lesson => { const old = currentLessons.find(item => item.taskId === lesson.taskId && item.taskPeriodIndex === lesson.taskPeriodIndex); return <tr key={`${lesson.taskId}:${lesson.taskPeriodIndex}`}><td>{tasksById.get(lesson.taskId)?.title ?? lesson.taskId} · 第{lesson.taskPeriodIndex}课时</td><td>{old ? positionOf(old, currentVersion.scheduleMode === 'progress') : '新增'}</td><td>{positionOf(lesson, true)}</td></tr>; })}</tbody></table></div>}
       {draft.result.conflicts.length > 0 && <div className="conflict-list">{draft.result.conflicts.map((conflict, index) => <p key={`${conflict.code}-${index}`}>⚠ {conflict.message}</p>)}</div>}
       {draft.result.unscheduled.length > 0 && <p className="error">还有 {draft.result.unscheduled.reduce((sum, item) => sum + item.remainingPeriods, 0)} 课时未排入，请调整任务或课表后重新生成。</p>}
       <div className="draft-actions"><label>版本原因 <input value={reason} onChange={event => setReason(event.target.value)} placeholder="例如 开学初计划" /></label><button className="button secondary" onClick={() => setDraft(null)}>放弃草案</button><button className="button primary" onClick={() => void confirm()} disabled={busy || !reason.trim() || draft.result.conflicts.length > 0 || draft.result.unscheduled.length > 0}>确认并保存新版本</button></div>
@@ -97,7 +99,7 @@ export function PlanPage() {
         return Array.from({ length: 7 }, (_, index) => {
           const date = dateFromTimestamp(weekStart + index * 86_400_000);
           const active = date >= project.startDate && date <= project.endDate;
-          return <div key={date} className={`calendar-cell ${active ? '' : 'outside'}`}><span className="calendar-date">{active ? date.slice(5) : ''}</span>{active && (byDate.get(date) ?? []).map(lesson => <div key={`${lesson.taskId}-${lesson.taskPeriodIndex}`} className="calendar-lesson">第{lesson.period}节 · {titleOf(lesson)}{lesson.sharedSlotLabel ? ` · ${lesson.sharedSlotLabel}` : ''}</div>)}</div>;
+          return <div key={date} className={`calendar-cell ${active ? '' : 'outside'}`}><span className="calendar-date">{active ? date.slice(5) : ''}</span>{active && (byDate.get(date) ?? []).map(lesson => <div key={`${lesson.taskId}-${lesson.taskPeriodIndex}`} className="calendar-lesson">{progressMode ? `计划课时 ${lesson.period}` : `第${lesson.period}节`} · {titleOf(lesson)}{lesson.sharedSlotLabel ? ` · ${lesson.sharedSlotLabel}` : ''}</div>)}</div>;
         });
       })}</div>}
     </section>}

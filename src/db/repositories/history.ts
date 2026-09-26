@@ -1,7 +1,7 @@
 import { generateCalendarDays, teachingWeekNumber } from '../../core/calendar/dates';
 import type { SemesterProject, TeachingTask } from '../../types/domain';
 import { db as appDb } from '../schema';
-import { validateProjectInput, type ProjectInput } from './projects';
+import { defaultWeeklyProgressSlots, validateProjectInput, type ProjectInput } from './projects';
 
 export interface CopyOptions {
   tasks: boolean; plannedPeriods: boolean; examNodes: boolean; selfStudy: boolean;
@@ -26,6 +26,7 @@ export async function copyHistoricalProject(
     const project: SemesterProject = {
       ...data, id, sourceProjectId, weekStart: source.weekStart ?? 7,
       sharedCourseSlots: options.courseSchedule ? (source.sharedCourseSlots ?? []).map(group => ({ ...group, id: crypto.randomUUID() })) : [],
+      weeklyProgressSlots: options.courseSchedule ? (source.weeklyProgressSlots ?? defaultWeeklyProgressSlots()).map(slot => ({ ...slot, id: crypto.randomUUID(), weekdays: [...slot.weekdays] })) : defaultWeeklyProgressSlots(),
       createdAt: timestamp, updatedAt: timestamp,
     };
     const days = generateCalendarDays(id, data.startDate, data.endDate);

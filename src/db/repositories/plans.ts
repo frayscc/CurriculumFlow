@@ -2,6 +2,7 @@ import { schedule, type ScheduleResult, type SchedulerInput } from '../../core/s
 import { rescheduleAfterPostponement } from '../../core/scheduler/reflow';
 import type { PlanVersion, ScheduledLesson } from '../../types/domain';
 import { db as appDb, type CurriculumDatabase } from '../schema';
+import { defaultWeeklyProgressSlots } from './projects';
 
 function fingerprint(input: SchedulerInput): string {
   const normalized = JSON.stringify({
@@ -30,7 +31,7 @@ async function readInput(projectId: string, database: CurriculumDatabase): Promi
   ]);
   return { project: {
     startDate: project.startDate, endDate: project.endDate,
-    weekStart: project.weekStart ?? 7, sharedCourseSlots: project.sharedCourseSlots ?? [],
+    weekStart: project.weekStart ?? 7, sharedCourseSlots: [], weeklyProgressSlots: project.weeklyProgressSlots ?? defaultWeeklyProgressSlots(),
   }, calendarDays, courseSchedules, scheduleOverrides, tasks };
 }
 
@@ -84,7 +85,7 @@ export async function confirmScheduleDraft(projectId: string, draft: ScheduleDra
     const version: PlanVersion = {
       id, projectId, version: (previous?.version ?? 0) + 1, createdAt: new Date().toISOString(),
       reason: reason.trim(), scheduleSnapshot: snapshot, inputFingerprint: draft.inputFingerprint,
-      weekStart: input.project.weekStart ?? 7,
+      weekStart: input.project.weekStart ?? 7, scheduleMode: input.project.weeklyProgressSlots?.length ? 'progress' : 'periods',
     };
     const rows: ScheduledLesson[] = snapshot.map(lesson => ({ ...lesson, projectId, planVersionId: id }));
     await database.planVersions.add(version);

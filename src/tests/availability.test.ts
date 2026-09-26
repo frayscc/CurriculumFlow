@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { availablePeriods, buildTeachingSlots, parsePeriods } from '../core/calendar/availability';
+import { availablePeriods, buildTeachingSlots, calendarStatus, parsePeriods } from '../core/calendar/availability';
 import { generateCalendarDays } from '../core/calendar/dates';
 import type { CourseSchedule } from '../types/domain';
 
@@ -54,5 +54,32 @@ describe('teaching availability', () => {
     expect(slots).toHaveLength(1);
     expect(slots[0]).toMatchObject({ date: '2026-09-16', period: 2, sharedSlotLabel: '周三/周四共享' });
     expect(slots[0].occurrences).toEqual([{ date: '2026-09-16', period: 2 }, { date: '2026-09-17', period: 4 }]);
+  });
+
+  it('maps five workdays to four progress slots and keeps only three visual day states', () => {
+    const days = generateCalendarDays('p', '2026-09-14', '2026-09-20');
+    const slots = buildTeachingSlots('2026-09-14', days, [], [], {
+      weekStart: 1,
+      weeklyProgressSlots: [
+        { id: '1', label: '第 1 课', weekdays: [1] }, { id: '2', label: '第 2 课', weekdays: [2] },
+        { id: '3', label: '第 3 课', weekdays: [3, 4] }, { id: '4', label: '第 4 课', weekdays: [5] },
+      ],
+    });
+    expect(slots).toHaveLength(4);
+    expect(slots[2].occurrences).toEqual([{ date: '2026-09-16', period: 3 }, { date: '2026-09-17', period: 3 }]);
+    expect(calendarStatus(days[0])).toBe('teaching');
+    expect(calendarStatus(days[5])).toBe('holiday');
+    days[4].dayType = 'exam';
+    expect(calendarStatus(days[4])).toBe('exam');
+
+    days[2].dayType = 'holiday';
+    const partial = buildTeachingSlots('2026-09-14', days, [], [], {
+      weekStart: 1,
+      weeklyProgressSlots: [
+        { id: '1', label: '第 1 课', weekdays: [1] }, { id: '2', label: '第 2 课', weekdays: [2] },
+        { id: '3', label: '第 3 课', weekdays: [3, 4] }, { id: '4', label: '第 4 课', weekdays: [5] },
+      ],
+    });
+    expect(partial.find(slot => slot.sharedSlotId === '3')?.occurrences).toEqual([{ date: '2026-09-17', period: 3 }]);
   });
 });

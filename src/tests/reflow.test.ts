@@ -18,14 +18,14 @@ describe('postponement reflow', () => {
     await setCourseSchedule(project.id, 4, [1], database);
     await createTask(project.id, { title: '力学', type: 'new_lesson', plannedPeriods: 3, allowSplit: true }, database);
     const first = await confirmScheduleDraft(project.id, await createScheduleDraft(project.id, database), '初稿', database);
-    expect(first.scheduleSnapshot.map(row => row.date)).toEqual(['2026-09-01', '2026-09-03', '2026-09-08']);
+    expect(first.scheduleSnapshot.map(row => row.date)).toEqual(['2026-09-01', '2026-09-02', '2026-09-04']);
     await recordActual(first.scheduleSnapshot[0].id, { status: 'completed', actualPeriods: 1 }, database);
     await recordActual(first.scheduleSnapshot[1].id, { status: 'postponed', reason: '停课' }, database);
     const draft = await createRescheduleDraft(project.id, database);
-    expect(draft.result.lessons.map(row => row.date)).toEqual(['2026-09-01', '2026-09-08', '2026-09-10']);
+    expect(draft.result.lessons.map(row => row.date)).toEqual(['2026-09-01', '2026-09-03', '2026-09-04']);
     const second = await confirmScheduleDraft(project.id, draft, '延期后顺延', database);
     expect(second.version).toBe(2);
-    expect((await database.planVersions.get(first.id))!.scheduleSnapshot.map(row => row.date)).toEqual(['2026-09-01', '2026-09-03', '2026-09-08']);
+    expect((await database.planVersions.get(first.id))!.scheduleSnapshot.map(row => row.date)).toEqual(['2026-09-01', '2026-09-02', '2026-09-04']);
     expect(await database.actualRecords.where('projectId').equals(project.id).count()).toBe(2);
   });
 

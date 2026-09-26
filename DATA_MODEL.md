@@ -26,8 +26,12 @@ interface SemesterProject {
   id: ID;
   schoolYear: string; grade: string; subject: string; semester: string;
   startDate: LocalDate; endDate: LocalDate;
-  sourceProjectId?: ID;
+  sourceProjectId?: ID; weekStart?: Weekday;
+  weeklyProgressSlots?: WeeklyProgressSlot[];
   createdAt: Timestamp; updatedAt: Timestamp;
+}
+interface WeeklyProgressSlot {
+  id: ID; label: string; weekdays: Weekday[];
 }
 interface CalendarDay {
   projectId: ID; date: LocalDate; weekday: Weekday;
@@ -45,7 +49,9 @@ interface ScheduleOverride {
 }
 ```
 
-每个项目日期区间中的日历日都有一条 `CalendarDay`。自然周末的 `normal` 日默认无课；周末如需教学应设为 `makeup_workday` 并填写 `scheduleWeekday`，或用日期覆盖明确增加课时。项目日期变更时在事务中增删边缘日，已有特殊日不得被静默清除。`originalPeriods` 是生成覆盖时的审计快照，排课只读取 `actualPeriods`。
+每个项目日期区间中的日历日都有一条 `CalendarDay`。界面把日期归纳为上课、放假、考试三种状态：普通工作日默认上课，普通周末默认放假；`makeup_workday` 在界面中仍显示为上课，并用 `scheduleWeekday` 指明它承接哪个工作日的教学进度。项目日期变更时在事务中增删边缘日，已有特殊日不得被静默清除。
+
+`weeklyProgressSlots` 把周一至周五映射为备课组教学进度。默认是 `[周一]、[周二]、[周三, 周四]、[周五]`，因此五个工作日形成四个计划课时。旧版 `CourseSchedule` 和 `ScheduleOverride` 继续保留，用于兼容历史备份和已确认计划。
 
 ## 教学任务、计划及执行
 

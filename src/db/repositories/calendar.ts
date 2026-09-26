@@ -1,4 +1,4 @@
-import { availablePeriods, normalizePeriods } from '../../core/calendar/availability';
+import { availablePeriods, normalizePeriods, type CalendarStatus } from '../../core/calendar/availability';
 import { parseLocalDate } from '../../core/calendar/dates';
 import type { CalendarDay, DayType, Weekday } from '../../types/domain';
 import { db as appDb } from '../schema';
@@ -21,7 +21,7 @@ export async function updateCalendarDay(projectId: string, date: string, edit: C
       note: edit.note?.trim() || undefined,
     };
     await database.calendarDays.put(next);
-    if (edit.dayType === 'holiday' || edit.dayType === 'unavailable') {
+    if (edit.dayType === 'holiday' || edit.dayType === 'unavailable' || edit.dayType === 'exam' || edit.dayType === 'school_event') {
       await database.scheduleOverrides.delete([projectId, date]);
     }
     return next;
@@ -49,7 +49,49 @@ export async function applyCalendarRange(
       note: edit.note?.trim() || undefined,
     }));
     await database.calendarDays.bulkPut(updated);
-    if (edit.dayType === 'holiday' || edit.dayType === 'unavailable') {
+    if (edit.dayType === 'holiday' || edit.dayType === 'unavailable' || edit.dayType === 'exam' || edit.dayType === 'school_event') {
+      await database.scheduleOverrides.where('[projectId+date]').between([projectId, startDate], [projectId, endDate], true, true).delete();
+    }
+  });
+}
+
+type QuickCalendarStatus = CalendarStatus | 'default';
+
+function quickStatusEdit(day: CalendarDay, status: QuickCalendarStatus, scheduleWeekday?: Weekday): CalendarDayEdit {
+  if (status === 'default') return { dayType: 'normal', title: '', note: '' };
+  if (status === 'holiday') return { dayType: 'holiday' };
+  if (status === 'exam') return { dayType: 'exam' };
+  if (day.weekday <= 5) return { dayType: 'normal' };
+  return { dayType: 'makeup_workday', scheduleWeekday: scheduleWeekday ?? day.scheduleWeekday ?? 2 };
+}
+
+export async function setCalendarStatus(
+  projectId: string, date: string, status: QuickCalendarStatus, scheduleWeekday?: Weekday, database = appDb,
+) {
+  const day = await database.calendarDays.get([projectId, date]);
+  if (!day) throw new Error('日期不在项目的学期范围内。');
+  return updateCalendarDay(projectId, date, quickStatusEdit(day, status, scheduleWeekday), database);
+}
+
+export async function applyCalendarStatusRange(
+  projectId: string, startDate: string, endDate: string, status: QuickCalendarStatus, scheduleWeekday?: Weekday, database = appDb,
+) {
+  parseLocalDate(startDate); parseLocalDate(endDate);
+  if (endDate < startDate) throw new Error('结束日期不能早于开始日期。');
+  await database.transaction('rw', database.calendarDays, database.scheduleOverrides, async () => {
+    const days = await database.calendarDays.where('[projectId+date]').between([projectId, startDate], [projectId, endDate], true, true).toArray();
+    if (!days.length || days[0].date !== startDate || days[days.length - 1].date !== endDate) throw new Error('选择的日期范围不在当前学期内。');
+    const updated = days.map(day => {
+      const edit = quickStatusEdit(day, status, scheduleWeekday);
+      return {
+        ...day, ...edit,
+        scheduleWeekday: edit.dayType === 'makeup_workday' ? edit.scheduleWeekday : undefined,
+        title: status === 'default' ? undefined : day.title,
+        note: status === 'default' ? undefined : day.note,
+      };
+    });
+    await database.calendarDays.bulkPut(updated);
+    if (status === 'holiday' || status === 'exam' || status === 'default') {
       await database.scheduleOverrides.where('[projectId+date]').between([projectId, startDate], [projectId, endDate], true, true).delete();
     }
   });

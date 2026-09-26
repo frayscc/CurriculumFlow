@@ -1,4 +1,4 @@
-import type { CalendarDay, CourseSchedule, ScheduleOverride, SharedCourseSlot, Weekday } from '../../types/domain';
+import type { CalendarDay, CourseSchedule, ScheduleOverride, SharedCourseSlot, Weekday, WeeklyProgressSlot } from '../../types/domain';
 import { teachingWeekNumber } from './dates';
 
 export interface TeachingSlot {
@@ -6,6 +6,15 @@ export interface TeachingSlot {
   source: 'weekly' | 'makeup' | 'override';
   sharedSlotId?: string; sharedSlotLabel?: string;
   occurrences?: Array<{ date: string; period: number }>;
+}
+
+export type CalendarStatus = 'teaching' | 'holiday' | 'exam';
+
+export function calendarStatus(day: CalendarDay): CalendarStatus {
+  if (day.dayType === 'exam') return 'exam';
+  if (day.dayType === 'holiday' || day.dayType === 'unavailable' || day.dayType === 'school_event') return 'holiday';
+  if (day.dayType === 'makeup_workday') return 'teaching';
+  return day.weekday >= 6 ? 'holiday' : 'teaching';
 }
 
 export function normalizePeriods(periods: number[]): number[] {
@@ -25,9 +34,8 @@ export function parsePeriods(text: string): number[] {
 export function availablePeriods(
   day: CalendarDay, schedules: CourseSchedule[], override?: ScheduleOverride,
 ): number[] {
-  if (day.dayType === 'holiday' || day.dayType === 'unavailable') return [];
+  if (day.dayType === 'holiday' || day.dayType === 'unavailable' || day.dayType === 'school_event' || day.dayType === 'exam') return [];
   if (override) return normalizePeriods(override.actualPeriods);
-  if (day.dayType === 'school_event' || day.dayType === 'exam') return [];
   let weekday: Weekday;
   if (day.dayType === 'makeup_workday') {
     if (!day.scheduleWeekday) throw new Error(`${day.date} 调休日缺少执行课表星期。`);
@@ -41,9 +49,41 @@ export function availablePeriods(
 
 export function buildTeachingSlots(
   startDate: string, days: CalendarDay[], schedules: CourseSchedule[], overrides: ScheduleOverride[],
-  options: { weekStart?: Weekday; sharedCourseSlots?: SharedCourseSlot[] } = {},
+  options: { weekStart?: Weekday; sharedCourseSlots?: SharedCourseSlot[]; weeklyProgressSlots?: WeeklyProgressSlot[] } = {},
 ): TeachingSlot[] {
   const overrideByDate = new Map(overrides.map(override => [override.date, override]));
+  if (options.weeklyProgressSlots?.length) {
+    const grouped = new Map<string, TeachingSlot>();
+    const result: TeachingSlot[] = [];
+    const patternByWeekday = new Map<Weekday, { slot: WeeklyProgressSlot; index: number }>();
+    options.weeklyProgressSlots.forEach((slot, index) => slot.weekdays.forEach(weekday => patternByWeekday.set(weekday, { slot, index })));
+    for (const day of [...days].sort((a, b) => a.date.localeCompare(b.date))) {
+      const override = overrideByDate.get(day.date);
+      if (calendarStatus(day) !== 'teaching' || override?.actualPeriods.length === 0) continue;
+      const effectiveWeekday = day.dayType === 'makeup_workday' && day.scheduleWeekday ? day.scheduleWeekday : day.weekday;
+      const pattern = patternByWeekday.get(effectiveWeekday);
+      if (!pattern) continue;
+      const weekNumber = teachingWeekNumber(startDate, day.date, options.weekStart ?? 7);
+      const key = `${weekNumber}:${pattern.slot.id}`;
+      const occurrence = { date: day.date, period: pattern.index + 1 };
+      const existing = grouped.get(key);
+      if (existing) {
+        existing.occurrences = [...(existing.occurrences ?? [{ date: existing.date, period: existing.period }]), occurrence]
+          .sort((a, b) => a.date.localeCompare(b.date));
+        continue;
+      }
+      const shared = pattern.slot.weekdays.length > 1;
+      const teachingSlot: TeachingSlot = {
+        date: day.date, weekNumber, period: pattern.index + 1,
+        source: override ? 'override' : day.dayType === 'makeup_workday' ? 'makeup' : 'weekly',
+        sharedSlotId: shared ? pattern.slot.id : undefined,
+        sharedSlotLabel: shared ? pattern.slot.weekdays.map(value => `周${'一二三四五六日'[value - 1]}`).join('/') : undefined,
+        occurrences: shared ? [occurrence] : undefined,
+      };
+      grouped.set(key, teachingSlot); result.push(teachingSlot);
+    }
+    return result.sort((a, b) => a.date.localeCompare(b.date) || a.period - b.period);
+  }
   const sharedMember = new Map<string, SharedCourseSlot>();
   for (const group of options.sharedCourseSlots ?? []) {
     for (const member of group.members) sharedMember.set(`${member.weekday}:${member.period}`, group);

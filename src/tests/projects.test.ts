@@ -1,8 +1,9 @@
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createProject, deleteProject, updateCalendarPreferences, updateProject } from '../db/repositories/projects';
+import { createProject, defaultWeeklyProgressSlots, deleteProject, updateCalendarPreferences, updateProject, updateWeeklyProgressSlots } from '../db/repositories/projects';
 import { CurriculumDatabase } from '../db/schema';
-import { applyCalendarRange, setCourseSchedule, setScheduleOverride, updateCalendarDay } from '../db/repositories/calendar';
+import { applyCalendarRange, applyCalendarStatusRange, setCalendarStatus, setCourseSchedule, setScheduleOverride, updateCalendarDay } from '../db/repositories/calendar';
+import { calendarStatus } from '../core/calendar/availability';
 
 const initial = {
   schoolYear: '2026-2027', grade: '九年级', subject: '物理', semester: '第一学期',
@@ -17,6 +18,7 @@ describe('project repository', () => {
   it('creates a project and every calendar day in one operation', async () => {
     const project = await createProject(initial, database);
     expect(await database.projects.get(project.id)).toEqual(project);
+    expect(project.weeklyProgressSlots).toEqual(defaultWeeklyProgressSlots());
     expect(await database.calendarDays.where('projectId').equals(project.id).count()).toBe(5);
     await expect(createProject(initial, database)).rejects.toThrow('已存在');
     expect(await database.projects.count()).toBe(1);
@@ -64,5 +66,20 @@ describe('project repository', () => {
       ...groups,
       { id: 'duplicate', label: '重复', members: [{ weekday: 3, period: 2 }, { weekday: 5, period: 1 }] },
     ], database)).rejects.toThrow('不能加入多个');
+  });
+
+  it('stores a four-progress weekly pattern and applies quick calendar states', async () => {
+    const project = await createProject({ ...initial, endDate: '2026-09-06' }, database);
+    const pattern = defaultWeeklyProgressSlots([2, 3]);
+    expect((await updateWeeklyProgressSlots(project.id, pattern, database)).weeklyProgressSlots).toEqual(pattern);
+    await setCalendarStatus(project.id, '2026-09-04', 'exam', undefined, database);
+    await applyCalendarStatusRange(project.id, '2026-09-05', '2026-09-06', 'holiday', undefined, database);
+    expect(calendarStatus((await database.calendarDays.get([project.id, '2026-09-04']))!)).toBe('exam');
+    expect(calendarStatus((await database.calendarDays.get([project.id, '2026-09-05']))!)).toBe('holiday');
+    await setCalendarStatus(project.id, '2026-09-06', 'teaching', 2, database);
+    expect(await database.calendarDays.get([project.id, '2026-09-06'])).toMatchObject({ dayType: 'makeup_workday', scheduleWeekday: 2 });
+    await updateCalendarDay(project.id, '2026-09-05', { dayType: 'holiday', title: '临时假期' }, database);
+    await setCalendarStatus(project.id, '2026-09-05', 'default', undefined, database);
+    expect(await database.calendarDays.get([project.id, '2026-09-05'])).toMatchObject({ dayType: 'normal', title: undefined });
   });
 });

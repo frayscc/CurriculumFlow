@@ -1,5 +1,5 @@
 import { generateCalendarDays, parseLocalDate } from '../../core/calendar/dates';
-import type { SemesterProject, SharedCourseSlot, Weekday } from '../../types/domain';
+import type { SemesterProject, SharedCourseSlot, Weekday, WeeklyProgressSlot } from '../../types/domain';
 import { db as appDb, type CurriculumDatabase } from '../schema';
 
 export type ProjectInput = Pick<SemesterProject, 'schoolYear' | 'grade' | 'subject' | 'semester' | 'startDate' | 'endDate'>;
@@ -30,13 +30,41 @@ export async function createProject(input: ProjectInput, database = appDb): Prom
   const id = crypto.randomUUID();
   const calendarDays = generateCalendarDays(id, data.startDate, data.endDate);
   const now = new Date().toISOString();
-  const project: SemesterProject = { ...data, id, weekStart: 7, sharedCourseSlots: [], createdAt: now, updatedAt: now };
+  const project: SemesterProject = { ...data, id, weekStart: 7, sharedCourseSlots: [], weeklyProgressSlots: defaultWeeklyProgressSlots(), createdAt: now, updatedAt: now };
   await database.transaction('rw', database.projects, database.calendarDays, async () => {
     await ensureUnique(data, database);
     await database.projects.add(project);
     await database.calendarDays.bulkAdd(calendarDays);
   });
   return project;
+}
+
+export function defaultWeeklyProgressSlots(merged: [Weekday, Weekday] = [3, 4]): WeeklyProgressSlot[] {
+  const weekdays = [1, 2, 3, 4, 5] as Weekday[];
+  const groups: Weekday[][] = [];
+  for (const weekday of weekdays) {
+    if (weekday === merged[1]) continue;
+    groups.push(weekday === merged[0] ? [merged[0], merged[1]] : [weekday]);
+  }
+  return groups.map((days, index) => ({ id: `progress-${index + 1}`, label: `第 ${index + 1} 课`, weekdays: days }));
+}
+
+export async function updateWeeklyProgressSlots(id: string, slots: WeeklyProgressSlot[], database = appDb): Promise<SemesterProject> {
+  const used = new Set<Weekday>();
+  if (!slots.length) throw new Error('每周至少需要一个教学进度。');
+  for (const slot of slots) {
+    if (!slot.id || !slot.label.trim() || !slot.weekdays.length) throw new Error('教学进度设置无效。');
+    for (const weekday of slot.weekdays) {
+      if (weekday < 1 || weekday > 5 || used.has(weekday)) throw new Error('周一至周五必须各自归入一个教学进度。');
+      used.add(weekday);
+    }
+  }
+  if (used.size !== 5) throw new Error('周一至周五必须全部安排。');
+  const project = await database.projects.get(id);
+  if (!project) throw new Error('项目不存在。');
+  const next = { ...project, weeklyProgressSlots: slots.map(slot => ({ ...slot, label: slot.label.trim(), weekdays: [...slot.weekdays] })), sharedCourseSlots: [], updatedAt: new Date().toISOString() };
+  await database.projects.put(next);
+  return next;
 }
 
 export async function updateCalendarPreferences(

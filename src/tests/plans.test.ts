@@ -25,6 +25,7 @@ describe('plan versions', () => {
     const task = await createTask(project.id, firstTask, database);
     const v1 = await confirmScheduleDraft(project.id, await createScheduleDraft(project.id, database), '初始计划', database);
     expect(v1.version).toBe(1);
+    expect(v1.scheduleMode).toBe('progress');
     expect(v1.scheduleSnapshot[0]).toMatchObject({ taskId: task.id, date: '2026-09-14', taskTitle: firstTask.title });
     await updateTask(task.id, { ...firstTask, title: '13.1 新标题', plannedPeriods: 2 }, database);
     const v2 = await confirmScheduleDraft(project.id, await createScheduleDraft(project.id, database), '增加课时', database);

@@ -11,8 +11,11 @@ export type ExamFileType = 'paper_word' | 'paper_pdf' | 'answer_sheet_word' | 'a
 export interface SemesterProject {
   id: ID; schoolYear: string; grade: string; subject: string; semester: string;
   startDate: LocalDate; endDate: LocalDate; sourceProjectId?: ID; weekStart?: Weekday;
-  sharedCourseSlots?: SharedCourseSlot[];
+  sharedCourseSlots?: SharedCourseSlot[]; weeklyProgressSlots?: WeeklyProgressSlot[];
   createdAt: Timestamp; updatedAt: Timestamp;
+}
+export interface WeeklyProgressSlot {
+  id: ID; label: string; weekdays: Weekday[];
 }
 export interface SharedCourseSlot {
   id: ID; label: string;
@@ -37,6 +40,7 @@ export interface ScheduledLessonSnapshot {
 export interface PlanVersion {
   id: ID; projectId: ID; version: number; createdAt: Timestamp; reason: string;
   scheduleSnapshot: ScheduledLessonSnapshot[]; inputFingerprint: string; weekStart?: Weekday;
+  scheduleMode?: 'periods' | 'progress';
 }
 export interface ScheduledLesson extends ScheduledLessonSnapshot { projectId: ID; planVersionId: ID; }
 export interface ActualTeachingRecord {

@@ -13,6 +13,7 @@ export interface DashboardData {
   structuredBytes: number;
   attachmentBytes: number;
   attachmentCount: number;
+  progressMode: boolean;
 }
 
 export async function readProjectDashboard(projectId: string, today: string, database = appDb): Promise<DashboardData | undefined> {
@@ -55,5 +56,6 @@ export async function readProjectDashboard(projectId: string, today: string, dat
     lagPeriods: Math.max(0, plannedDue - completed), nextExam,
     structuredBytes: new TextEncoder().encode(JSON.stringify(structured)).byteLength,
     attachmentBytes: files.reduce((total, file) => total + file.size, 0), attachmentCount: files.length,
+    progressMode: version?.scheduleMode === 'progress',
   };
 }
