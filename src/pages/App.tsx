@@ -1,6 +1,6 @@
 import { Link, Route, Routes, useNavigate, useParams } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ProjectForm } from '../components/ProjectForm';
 import { createProject, deleteProject, updateProject } from '../db/repositories/projects';
 import { db } from '../db/schema';
@@ -15,6 +15,18 @@ import { ExportPage } from './ExportPage';
 import { BackupPage } from './BackupPage';
 import { copyHistoricalProject, defaultCopyOptions, type CopyOptions } from '../db/repositories/history';
 import { readProjectDashboard } from '../db/repositories/dashboard';
+import { getSyncStatus, SYNC_EVENT, type SyncStatus } from '../db/serverSync';
+
+function StorageStatus() {
+  const [status, setStatus] = useState<SyncStatus>(getSyncStatus());
+  useEffect(() => {
+    const listener = (event: Event) => setStatus((event as CustomEvent).detail);
+    window.addEventListener(SYNC_EVENT, listener);
+    return () => window.removeEventListener(SYNC_EVENT, listener);
+  }, []);
+  const labels: Record<string, string> = { local: '本地教学工作空间', connecting: '正在连接 SQLite…', syncing: '正在保存…', synced: 'SQLite 已同步', error: 'SQLite 同步异常' };
+  return <span className={`storage-status ${status.state}`} title={status.message}>{labels[status.state] ?? labels.local}</span>;
+}
 
 function projectTitle(project: SemesterProject) {
   return `${project.schoolYear}学年 · ${project.grade}${project.subject} · ${project.semester}`;
@@ -113,5 +125,5 @@ function ProjectPage() {
 }
 
 export function App() {
-  return <div className="app-shell"><header className="app-header"><Link to="/" className="brand"><span className="brand-mark">C</span><span>CurriculumFlow</span></Link><span className="header-note"><Link to="/archive">考试资源库</Link> · 本地教学工作空间</span></header><Routes><Route path="/" element={<Home />} /><Route path="/archive" element={<ArchivePage />} /><Route path="/backup" element={<BackupPage />} /><Route path="/projects/:projectId" element={<ProjectPage />} /><Route path="/projects/:projectId/calendar" element={<CalendarPage />} /><Route path="/projects/:projectId/tasks" element={<TasksPage />} /><Route path="/projects/:projectId/plan" element={<PlanPage />} /><Route path="/projects/:projectId/execution" element={<ExecutionPage />} /><Route path="/projects/:projectId/exams" element={<ExamPage />} /><Route path="/projects/:projectId/exams/:examId" element={<ExamPage />} /><Route path="/projects/:projectId/export" element={<ExportPage />} /><Route path="/projects/:projectId/backup" element={<BackupPage />} /><Route path="*" element={<main className="workspace"><h1>页面不存在</h1><Link to="/">返回项目列表</Link></main>} /></Routes></div>;
+  return <div className="app-shell"><header className="app-header"><Link to="/" className="brand"><span className="brand-mark">C</span><span>CurriculumFlow</span></Link><span className="header-note"><Link to="/archive">考试资源库</Link> · <StorageStatus /></span></header><Routes><Route path="/" element={<Home />} /><Route path="/archive" element={<ArchivePage />} /><Route path="/backup" element={<BackupPage />} /><Route path="/projects/:projectId" element={<ProjectPage />} /><Route path="/projects/:projectId/calendar" element={<CalendarPage />} /><Route path="/projects/:projectId/tasks" element={<TasksPage />} /><Route path="/projects/:projectId/plan" element={<PlanPage />} /><Route path="/projects/:projectId/execution" element={<ExecutionPage />} /><Route path="/projects/:projectId/exams" element={<ExamPage />} /><Route path="/projects/:projectId/exams/:examId" element={<ExamPage />} /><Route path="/projects/:projectId/export" element={<ExportPage />} /><Route path="/projects/:projectId/backup" element={<BackupPage />} /><Route path="*" element={<main className="workspace"><h1>页面不存在</h1><Link to="/">返回项目列表</Link></main>} /></Routes></div>;
 }

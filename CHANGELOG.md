@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.4.0
+
+- 新增 Node.js 服务与 SQLite 持久化，项目、设置和考试附件在 Docker 卷中统一保存。
+- 浏览器保留 IndexedDB 即时操作，并自动与 SQLite 同步；空服务器首次打开时可迁移当前浏览器中的既有数据。
+- 新增 AMD64 多阶段 Docker 镜像、Compose 配置、健康检查和持久化卷。
+- 新增 GitHub Actions 云端构建，版本标签可发布到 `frayscc/curriculumflow`。
+
 ## 1.3.0
 
 - 将难以理解的“共享教学进度课位”改为每周四个教学进度，默认安排为周一、周二、周三/周四、周五。

@@ -1,0 +1,10 @@
+.git
+.github
+dist
+dist-portable
+releases
+node_modules
+*.log
+*.zip
+*.xlsx
+coverage
