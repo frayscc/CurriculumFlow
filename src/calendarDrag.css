@@ -1,0 +1,3 @@
+.term-calendar.is-dragging .calendar-task-bar {
+  pointer-events: none;
+}
