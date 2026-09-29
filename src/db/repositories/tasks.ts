@@ -1,8 +1,10 @@
 import { teachingWeekNumber } from '../../core/calendar/dates';
 import type { SemesterProject, TaskType, TeachingTask } from '../../types/domain';
 import { db as appDb } from '../schema';
+import { manualScheduleReason } from './manualSchedule';
 
-export type TaskInput = Pick<TeachingTask, 'title' | 'type' | 'plannedPeriods' | 'allowSplit'> &
+export type TaskInput = Pick<TeachingTask, 'title' | 'type'> &
+  Partial<Pick<TeachingTask, 'plannedPeriods' | 'allowSplit'>> &
   Partial<Pick<TeachingTask, 'chapter' | 'section' | 'fixedDate' | 'fixedWeek' | 'note' | 'examId'>>;
 
 const taskTypes: TaskType[] = ['new_lesson', 'exercise', 'quiz', 'exam', 'exam_review', 'review', 'self_study', 'experiment', 'special_training', 'other'];
@@ -11,13 +13,14 @@ function validate(input: TaskInput, project: SemesterProject): TaskInput {
   const title = input.title.trim();
   if (!title) throw new Error('教学任务名称不能为空。');
   if (!taskTypes.includes(input.type)) throw new Error('教学任务类型无效。');
-  if (!Number.isInteger(input.plannedPeriods) || input.plannedPeriods < 1 || input.plannedPeriods > 100) throw new Error('预计课时须为 1 至 100 的整数。');
+  const plannedPeriods = input.plannedPeriods ?? 1;
+  if (!Number.isInteger(plannedPeriods) || plannedPeriods < 1 || plannedPeriods > 100) throw new Error('教学日数须为 1 至 100 的整数。');
   if (input.fixedDate && input.fixedWeek) throw new Error('固定日期和固定周次只能选择一种。');
   if (input.fixedDate && (input.fixedDate < project.startDate || input.fixedDate > project.endDate)) throw new Error('固定日期不在学期范围内。');
   const maxWeek = teachingWeekNumber(project.startDate, project.endDate, project.weekStart ?? 7);
   if (input.fixedWeek && (!Number.isInteger(input.fixedWeek) || input.fixedWeek < 1 || input.fixedWeek > maxWeek)) throw new Error(`固定周次须为 1 至 ${maxWeek}。`);
   return {
-    ...input, title, chapter: input.chapter?.trim() || undefined,
+    ...input, title, plannedPeriods, allowSplit: input.allowSplit ?? true, chapter: input.chapter?.trim() || undefined,
     section: input.section?.trim() || undefined, note: input.note?.trim() || undefined,
     fixedDate: input.fixedDate || undefined, fixedWeek: input.fixedWeek || undefined,
   };
@@ -31,14 +34,14 @@ export async function createTask(projectId: string, input: TaskInput, database =
     if (data.examId && (await database.exams.get(data.examId))?.projectId !== projectId) throw new Error('关联考试不属于当前项目。');
     const last = await database.teachingTasks.where('[projectId+order]').between([projectId, 0], [projectId, Infinity]).last();
     const now = new Date().toISOString();
-    const task: TeachingTask = { ...data, id: crypto.randomUUID(), projectId, order: (last?.order ?? 0) + 1, createdAt: now, updatedAt: now };
+    const task: TeachingTask = { ...data, plannedPeriods: data.plannedPeriods ?? 1, allowSplit: data.allowSplit ?? true, id: crypto.randomUUID(), projectId, order: (last?.order ?? 0) + 1, createdAt: now, updatedAt: now };
     await database.teachingTasks.add(task);
     return task;
   });
 }
 
 export async function updateTask(taskId: string, input: TaskInput, database = appDb): Promise<TeachingTask> {
-  return database.transaction('rw', database.projects, database.teachingTasks, database.changeLogs, database.exams, async () => {
+  return database.transaction('rw', [database.projects, database.teachingTasks, database.changeLogs, database.exams, database.planVersions, database.scheduledLessons], async () => {
     const old = await database.teachingTasks.get(taskId);
     if (!old) throw new Error('教学任务不存在。');
     const project = await database.projects.get(old.projectId);
@@ -47,6 +50,12 @@ export async function updateTask(taskId: string, input: TaskInput, database = ap
     if (data.examId && (await database.exams.get(data.examId))?.projectId !== old.projectId) throw new Error('关联考试不属于当前项目。');
     const next: TeachingTask = { ...old, ...data, updatedAt: new Date().toISOString() };
     await database.teachingTasks.put(next);
+    const manualVersion = await database.planVersions.where('projectId').equals(old.projectId).filter(row => row.reason === manualScheduleReason).first();
+    if (manualVersion) {
+      const lessons = await database.scheduledLessons.where('planVersionId').equals(manualVersion.id).filter(row => row.taskId === old.id).toArray();
+      await database.scheduledLessons.bulkPut(lessons.map(row => ({ ...row, taskTitle: next.title, taskType: next.type })));
+      await database.planVersions.update(manualVersion.id, { scheduleSnapshot: await database.scheduledLessons.where('planVersionId').equals(manualVersion.id).toArray() });
+    }
     await database.changeLogs.add({ id: crypto.randomUUID(), projectId: old.projectId, entityType: 'TeachingTask', entityId: old.id, action: 'update', before: old, after: next, timestamp: next.updatedAt });
     return next;
   });
@@ -66,11 +75,15 @@ export async function reorderTasks(projectId: string, orderedIds: string[], data
 }
 
 export async function deleteTask(taskId: string, database = appDb): Promise<void> {
-  await database.transaction('rw', database.teachingTasks, database.actualRecords, database.changeLogs, async () => {
+  await database.transaction('rw', database.teachingTasks, database.actualRecords, database.changeLogs, database.planVersions, database.scheduledLessons, async () => {
     const task = await database.teachingTasks.get(taskId);
     if (!task) return;
     const actualCount = await database.actualRecords.where('[projectId+taskId]').equals([task.projectId, taskId]).count();
-    if (actualCount || task.examId) throw new Error('该任务存在实际教学记录或考试资源关联，请先解除关联。');
+    if (actualCount || task.examId) throw new Error('该内容关联了试卷资源或旧版执行记录，请先解除关联。');
+    const lessons = await database.scheduledLessons.where('[projectId+taskId]').equals([task.projectId, taskId]).toArray();
+    await database.scheduledLessons.bulkDelete(lessons.map(row => row.id));
+    const manualVersion = await database.planVersions.where('projectId').equals(task.projectId).filter(row => row.reason === manualScheduleReason).first();
+    if (manualVersion) await database.planVersions.update(manualVersion.id, { scheduleSnapshot: await database.scheduledLessons.where('planVersionId').equals(manualVersion.id).toArray() });
     await database.teachingTasks.delete(taskId);
     const remaining = await database.teachingTasks.where('projectId').equals(task.projectId).sortBy('order');
     await database.teachingTasks.bulkPut(remaining.map((item, index) => ({ ...item, order: index + 1 })));
@@ -86,7 +99,7 @@ export async function restoreDeletedTask(task: TeachingTask, database = appDb): 
     const position = Math.min(Math.max(task.order, 1), tasks.length + 1);
     const timestamp = new Date().toISOString();
     await database.teachingTasks.bulkPut(tasks.filter(item => item.order >= position).map(item => ({ ...item, order: item.order + 1, updatedAt: timestamp })));
-    await database.teachingTasks.add({ ...task, order: position, updatedAt: timestamp });
+    await database.teachingTasks.add({ ...task, scheduledStartDate: undefined, scheduledEndDate: undefined, plannedPeriods: 1, order: position, updatedAt: timestamp });
     await database.changeLogs.add({ id: crypto.randomUUID(), projectId: task.projectId, entityType: 'TeachingTask', entityId: task.id, action: 'restore', before: null, after: task, timestamp });
   });
 }

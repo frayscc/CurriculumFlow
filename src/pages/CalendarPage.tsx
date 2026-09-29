@@ -1,12 +1,13 @@
-import { useEffect, useMemo, useState, type FormEvent, type MouseEvent } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties, type DragEvent, type FormEvent, type MouseEvent } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Link, useParams } from 'react-router-dom';
-import { buildTeachingSlots, calendarStatus, type CalendarStatus } from '../core/calendar/availability';
+import { calendarStatus, type CalendarStatus } from '../core/calendar/availability';
 import { orderedWeekdays, weekdayOf } from '../core/calendar/dates';
 import { applyCalendarStatusRange, updateCalendarDay } from '../db/repositories/calendar';
-import { defaultWeeklyProgressSlots, updateCalendarPreferences, updateWeeklyProgressSlots } from '../db/repositories/projects';
+import { createTask } from '../db/repositories/tasks';
+import { placeTask, unplaceTask } from '../db/repositories/manualSchedule';
 import { db } from '../db/schema';
-import type { CalendarDay, Weekday, WeeklyProgressSlot } from '../types/domain';
+import type { CalendarDay, TaskType, TeachingTask, Weekday } from '../types/domain';
 
 const weekdayNames = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
 const statusLabels: Record<CalendarStatus, string> = { teaching: '上课', holiday: '放假', exam: '考试' };
@@ -52,15 +53,23 @@ function DayEditor({ day, onError }: { day: CalendarDay; onError: (message: stri
   </form>;
 }
 
-function progressLabel(slot: WeeklyProgressSlot) {
-  return slot.weekdays.map(day => weekdayNames[day - 1]).join(' / ');
+const taskTypeLabels: Record<TaskType, string> = { new_lesson: '新课', exercise: '练习', quiz: '检测', exam: '考试', exam_review: '讲评', review: '复习', self_study: '自习', experiment: '实验', special_training: '专项训练', other: '其他' };
+
+function addDays(date: string, amount: number) {
+  const value = new Date(`${date}T00:00:00Z`); value.setUTCDate(value.getUTCDate() + amount);
+  return value.toISOString().slice(0, 10);
+}
+
+function daySpan(start?: string, end?: string) {
+  if (!start || !end) return 1;
+  return Math.round((Date.parse(`${end}T00:00:00Z`) - Date.parse(`${start}T00:00:00Z`)) / 86400000) + 1;
 }
 
 export function CalendarPage() {
   const { projectId = '' } = useParams();
   const project = useLiveQuery(() => db.projects.get(projectId), [projectId]);
   const days = useLiveQuery(() => db.calendarDays.where('projectId').equals(projectId).sortBy('date'), [projectId]);
-  const overrides = useLiveQuery(() => db.scheduleOverrides.where('projectId').equals(projectId).sortBy('date'), [projectId]);
+  const tasks = useLiveQuery(() => db.teachingTasks.where('projectId').equals(projectId).sortBy('order'), [projectId]);
   const [month, setMonth] = useState('');
   const [selectedDate, setSelectedDate] = useState('');
   const [rangeStart, setRangeStart] = useState('');
@@ -68,9 +77,9 @@ export function CalendarPage() {
   const [makeupWeekday, setMakeupWeekday] = useState<Weekday>(2);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [newTitle, setNewTitle] = useState('');
+  const [newType, setNewType] = useState<TaskType>('new_lesson');
 
-  const progressSlots = project?.weeklyProgressSlots ?? defaultWeeklyProgressSlots();
-  const merged = progressSlots.find(slot => slot.weekdays.length > 1)?.weekdays ?? [3, 4];
   const activeMonth = month || project?.startDate.slice(0, 7) || '';
   const months = useMemo(() => [...new Set((days ?? []).map(day => day.date.slice(0, 7)))], [days]);
   const dayByDate = useMemo(() => new Map((days ?? []).map(day => [day.date, day])), [days]);
@@ -85,9 +94,6 @@ export function CalendarPage() {
     while (cells.length % 7) cells.push(null);
     return cells;
   }, [activeMonth, project?.weekStart]);
-  const slotCount = project && days && overrides ? buildTeachingSlots(project.startDate, days, [], overrides, {
-    weekStart: project.weekStart ?? 7, weeklyProgressSlots: progressSlots,
-  }).length : undefined;
   const calendarWeekdays = orderedWeekdays(project?.weekStart ?? 7);
   const selectedDay = selectedDate ? dayByDate.get(selectedDate) : undefined;
 
@@ -126,30 +132,55 @@ export function CalendarPage() {
     if (next) { setMonth(next); setSelectedDate(''); setRangeStart(''); setRangeEnd(''); }
   }
 
-  async function changeWeekStart(value: Weekday) {
-    try { await updateCalendarPreferences(projectId, value, []); setError(''); }
-    catch (caught) { setError(caught instanceof Error ? caught.message : '一周起始日保存失败。'); }
+  async function addContent(event: FormEvent) {
+    event.preventDefault();
+    try { await createTask(projectId, { title: newTitle, type: newType }); setNewTitle(''); setError(''); setNotice('教学内容已添加，请拖到月历中。'); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : '教学内容添加失败。'); }
   }
 
-  async function changeMergedDays(value: string) {
-    const start = Number(value) as Weekday; const end = (Number(value) + 1) as Weekday;
-    try { await updateWeeklyProgressSlots(projectId, defaultWeeklyProgressSlots([start, end]), db); setError(''); }
-    catch (caught) { setError(caught instanceof Error ? caught.message : '每周教学进度保存失败。'); }
+  function startDrag(event: DragEvent, task: TeachingTask, mode: 'move' | 'resize') {
+    event.stopPropagation();
+    event.dataTransfer.effectAllowed = mode === 'move' ? 'move' : 'link';
+    event.dataTransfer.setData('application/x-curriculumflow-task', JSON.stringify({ taskId: task.id, mode }));
   }
 
-  if (project === undefined || !days || !overrides) return <main className="workspace">正在读取校历与课表…</main>;
+  async function dropOnDate(event: DragEvent, date: string) {
+    event.preventDefault(); event.stopPropagation();
+    try {
+      const raw = event.dataTransfer.getData('application/x-curriculumflow-task');
+      if (!raw) return;
+      const data = JSON.parse(raw) as { taskId: string; mode: 'move' | 'resize' };
+      const task = tasks?.find(item => item.id === data.taskId);
+      if (!task) return;
+      if (data.mode === 'resize') {
+        if (!task.scheduledStartDate) throw new Error('请先把这项内容拖入月历。');
+        await placeTask(task.id, task.scheduledStartDate, date);
+      } else {
+        const span = daySpan(task.scheduledStartDate, task.scheduledEndDate);
+        await placeTask(task.id, date, addDays(date, span - 1));
+      }
+      setError(''); setNotice('教学安排已保存为最终版。');
+    } catch (caught) { setError(caught instanceof Error ? caught.message : '教学安排保存失败。'); }
+  }
+
+  async function removePlacement(taskId: string) {
+    try { await unplaceTask(taskId); setError(''); setNotice('已移回待安排区。'); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : '取消安排失败。'); }
+  }
+
+  if (project === undefined || !days || !tasks) return <main className="workspace">正在读取校历与教学安排…</main>;
   if (!project) return <main className="workspace"><Link to="/">返回项目列表</Link><h1>项目不存在</h1></main>;
 
   return <main className="workspace calendar-workspace">
     <Link to={`/projects/${projectId}`} className="back-link">← 返回项目概览</Link>
-    <div className="page-heading"><div><p className="eyebrow">{project.grade}{project.subject} · {project.semester}</p><h1>校历与教学安排</h1><p className="muted">先确定每周四个教学进度，再在月历中标记上课、放假和考试。</p></div><div className="slot-summary"><strong>{slotCount ?? '…'}</strong><span>学期可用教学进度</span></div></div>
+    <div className="page-heading"><div><p className="eyebrow">{project.grade}{project.subject} · {project.semester}</p><h1>校历与教学安排</h1><p className="muted">把教学内容拖入上课日；拖动卡片右侧手柄可延长或缩短日期跨度。</p></div></div>
     {error && <p role="alert" className="error page-error">{error}</p>}
     {notice && <p role="status" className="calendar-notice">{notice}</p>}
 
-    <section className="section-panel calendar-section progress-pattern-section">
-      <div className="section-heading"><div><h2>每周 4 个教学进度</h2><p>五个工作日映射为四个计划课时，周三和周四默认使用同一个教学内容。</p></div><div className="progress-settings"><label>合并日期<select value={merged[0]} onChange={event => void changeMergedDays(event.target.value)}><option value="1">周一 / 周二</option><option value="2">周二 / 周三</option><option value="3">周三 / 周四</option><option value="4">周四 / 周五</option></select></label><label>一周开始于<select value={project.weekStart ?? 7} onChange={event => void changeWeekStart(Number(event.target.value) as Weekday)}>{([1,2,3,4,5,6,7] as Weekday[]).map(day => <option key={day} value={day}>{weekdayNames[day - 1]}</option>)}</select></label></div></div>
-      <div className="progress-slot-grid">{progressSlots.map((slot, index) => <article className={`progress-slot-card ${slot.weekdays.length > 1 ? 'merged' : ''}`} key={slot.id}><span>计划课时 {index + 1}</span><strong>{progressLabel(slot)}</strong><small>{slot.weekdays.length > 1 ? '两天使用同一个教学进度，合计 1 课时' : '独立教学进度，计 1 课时'}</small></article>)}</div>
-      <p className="calendar-preference-hint">修改后会用于下一次生成教学计划，已经确认的历史版本保持不变。</p>
+    <section className="section-panel calendar-section schedule-palette-section">
+      <div className="section-heading"><div><h2>待安排教学内容</h2><p>可新增新课、练习、考试等内容，拖入月历后即成为最终安排。</p></div><Link to={`/projects/${projectId}/tasks`}>管理全部内容 →</Link></div>
+      <form className="quick-task-form" onSubmit={event => void addContent(event)}><input value={newTitle} onChange={event => setNewTitle(event.target.value)} placeholder="输入教学内容" required /><select value={newType} onChange={event => setNewType(event.target.value as TaskType)}>{Object.entries(taskTypeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><button className="button secondary" type="submit">新增</button></form>
+      <div className="schedule-palette">{tasks.filter(task => !task.scheduledStartDate).map(task => <div className={`schedule-chip ${task.type}`} draggable onDragStart={event => startDrag(event, task, 'move')} key={task.id}><span>{task.title}</span><small>{taskTypeLabels[task.type]} · 拖入月历</small></div>)}{tasks.length > 0 && tasks.every(task => task.scheduledStartDate) && <p className="muted">所有教学内容都已安排。</p>}{tasks.length === 0 && <p className="muted">请先新增一项教学内容。</p>}</div>
     </section>
 
     <section className="section-panel calendar-section visual-calendar-section">
@@ -161,9 +192,9 @@ export function CalendarPage() {
         if (!day) return <span className="term-day outside" key={date}><span>{dateParts(date).day}</span></span>;
         const status = calendarStatus(day);
         const effectiveWeekday = day.dayType === 'makeup_workday' && day.scheduleWeekday ? day.scheduleWeekday : day.weekday;
-        const progressIndex = progressSlots.findIndex(slot => slot.weekdays.includes(effectiveWeekday));
         const inRange = !!rangeStart && date >= rangeStart && date <= (rangeEnd || rangeStart);
-        return <button type="button" key={date} className={`term-day ${status} ${selectedDate === date ? 'selected' : ''} ${inRange ? 'in-range' : ''}`} onClick={event => selectCalendarDate(date, event)}><span className="day-number">{dateParts(date).day}</span><span className="day-kind">{statusLabels[status]}</span>{day.title && <strong>{day.title}</strong>}{status === 'teaching' && progressIndex >= 0 && <em>计划课时 {progressIndex + 1}</em>}{day.dayType === 'makeup_workday' && <small>执行{weekdayNames[effectiveWeekday - 1]}安排</small>}{!day.title && status === 'holiday' && <small>{day.weekday >= 6 && day.dayType === 'normal' ? '周末' : '已设为放假'}</small>}</button>;
+        const startingTasks = tasks.filter(task => task.scheduledStartDate === date || (index % 7 === 0 && !!task.scheduledStartDate && !!task.scheduledEndDate && task.scheduledStartDate < date && task.scheduledEndDate >= date));
+        return <div role="button" tabIndex={0} key={date} className={`term-day ${status} ${selectedDate === date ? 'selected' : ''} ${inRange ? 'in-range' : ''}`} onClick={event => selectCalendarDate(date, event)} onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; }} onDrop={event => void dropOnDate(event, date)}><span className="day-number">{dateParts(date).day}</span><span className="day-kind">{statusLabels[status]}</span>{day.title && <strong>{day.title}</strong>}<div className="day-schedule-items">{startingTasks.map(task => <div className={`calendar-task-bar ${task.type}`} style={{ '--task-span': Math.min(daySpan(date, task.scheduledEndDate), 7 - (index % 7)) } as CSSProperties} draggable onDragStart={event => startDrag(event, task, 'move')} onClick={event => event.stopPropagation()} key={task.id}><span title={task.title}>{task.title}</span><button type="button" draggable onDragStart={event => startDrag(event, task, 'resize')} title="拖到新的结束日期" aria-label={`调整 ${task.title} 的日期跨度`}>❙</button><button type="button" onClick={() => void removePlacement(task.id)} title="移回待安排区" aria-label={`取消安排 ${task.title}`}>×</button></div>)}</div>{day.dayType === 'makeup_workday' && <small>执行{weekdayNames[effectiveWeekday - 1]}安排</small>}{!day.title && status === 'holiday' && <small>{day.weekday >= 6 && day.dayType === 'normal' ? '周末' : '已设为放假'}</small>}</div>;
       })}</div></div>
       <div className="calendar-selection-summary"><span>{rangeStart ? `已选择：${rangeStart}${rangeEnd && rangeEnd !== rangeStart ? ` 至 ${rangeEnd}` : ''}` : '尚未选择日期'}</span><label>周末设为上课时执行<select value={makeupWeekday} onChange={event => setMakeupWeekday(Number(event.target.value) as Weekday)}>{weekdayNames.slice(0, 5).map((label, index) => <option key={label} value={index + 1}>{label}</option>)}</select></label></div>
       {selectedDay ? <DayEditor key={`${selectedDay.date}-${selectedDay.dayType}-${selectedDay.scheduleWeekday ?? ''}-${selectedDay.title ?? ''}`} day={selectedDay} onError={setError} /> : <aside className="day-editor empty-day-editor"><strong>选择一个日期</strong><p>点击月历日期后，可使用数字键快速设置状态。</p></aside>}
