@@ -79,6 +79,7 @@ export function CalendarPage() {
   const [notice, setNotice] = useState('');
   const [newTitle, setNewTitle] = useState('');
   const [newType, setNewType] = useState<TaskType>('new_lesson');
+  const [stretchingTaskId, setStretchingTaskId] = useState('');
 
   const activeMonth = month || project?.startDate.slice(0, 7) || '';
   const months = useMemo(() => [...new Set((days ?? []).map(day => day.date.slice(0, 7)))], [days]);
@@ -168,6 +169,21 @@ export function CalendarPage() {
     catch (caught) { setError(caught instanceof Error ? caught.message : '取消安排失败。'); }
   }
 
+  async function clickCalendarDate(date: string, event: MouseEvent) {
+    if (!stretchingTaskId) return selectCalendarDate(date, event);
+    const task = tasks?.find(item => item.id === stretchingTaskId);
+    if (!task?.scheduledStartDate) { setStretchingTaskId(''); return; }
+    try {
+      await placeTask(task.id, task.scheduledStartDate, date);
+      setStretchingTaskId(''); setError(''); setNotice(`${task.title} 已延长至 ${date}。`);
+    } catch (caught) { setError(caught instanceof Error ? caught.message : '日期跨度调整失败。'); }
+  }
+
+  function chooseStretchEnd(event: MouseEvent, task: TeachingTask) {
+    event.stopPropagation(); setStretchingTaskId(task.id); setError('');
+    setNotice(`正在调整“${task.title}”：请拖动手柄到结束日期，或直接点击结束日期。`);
+  }
+
   if (project === undefined || !days || !tasks) return <main className="workspace">正在读取校历与教学安排…</main>;
   if (!project) return <main className="workspace"><Link to="/">返回项目列表</Link><h1>项目不存在</h1></main>;
 
@@ -194,7 +210,7 @@ export function CalendarPage() {
         const effectiveWeekday = day.dayType === 'makeup_workday' && day.scheduleWeekday ? day.scheduleWeekday : day.weekday;
         const inRange = !!rangeStart && date >= rangeStart && date <= (rangeEnd || rangeStart);
         const startingTasks = tasks.filter(task => task.scheduledStartDate === date || (index % 7 === 0 && !!task.scheduledStartDate && !!task.scheduledEndDate && task.scheduledStartDate < date && task.scheduledEndDate >= date));
-        return <div role="button" tabIndex={0} key={date} className={`term-day ${status} ${selectedDate === date ? 'selected' : ''} ${inRange ? 'in-range' : ''}`} onClick={event => selectCalendarDate(date, event)} onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; }} onDrop={event => void dropOnDate(event, date)}><span className="day-number">{dateParts(date).day}</span><span className="day-kind">{statusLabels[status]}</span>{day.title && <strong>{day.title}</strong>}<div className="day-schedule-items">{startingTasks.map(task => <div className={`calendar-task-bar ${task.type}`} style={{ '--task-span': Math.min(daySpan(date, task.scheduledEndDate), 7 - (index % 7)) } as CSSProperties} draggable onDragStart={event => startDrag(event, task, 'move')} onClick={event => event.stopPropagation()} key={task.id}><span title={task.title}>{task.title}</span><button type="button" draggable onDragStart={event => startDrag(event, task, 'resize')} title="拖到新的结束日期" aria-label={`调整 ${task.title} 的日期跨度`}>❙</button><button type="button" onClick={() => void removePlacement(task.id)} title="移回待安排区" aria-label={`取消安排 ${task.title}`}>×</button></div>)}</div>{day.dayType === 'makeup_workday' && <small>执行{weekdayNames[effectiveWeekday - 1]}安排</small>}{!day.title && status === 'holiday' && <small>{day.weekday >= 6 && day.dayType === 'normal' ? '周末' : '已设为放假'}</small>}</div>;
+        return <div role="button" tabIndex={0} key={date} className={`term-day ${status} ${selectedDate === date ? 'selected' : ''} ${inRange ? 'in-range' : ''} ${stretchingTaskId ? 'stretch-target' : ''}`} onClick={event => void clickCalendarDate(date, event)} onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; }} onDrop={event => void dropOnDate(event, date)}><span className="day-number">{dateParts(date).day}</span><span className="day-kind">{statusLabels[status]}</span>{day.title && <strong>{day.title}</strong>}<div className="day-schedule-items">{startingTasks.map(task => <div className={`calendar-task-bar ${task.type} ${stretchingTaskId === task.id ? 'stretching' : ''}`} style={{ '--task-span': Math.min(daySpan(date, task.scheduledEndDate), 7 - (index % 7)) } as CSSProperties} onClick={event => event.stopPropagation()} key={task.id}><span className="task-title-drag" title="拖动整张卡片" draggable onDragStart={event => startDrag(event, task, 'move')}>{task.title}</span><span className="resize-handle" role="button" tabIndex={0} draggable onDragStart={event => startDrag(event, task, 'resize')} onClick={event => chooseStretchEnd(event, task)} title="拖动或点击后选择结束日期" aria-label={`调整 ${task.title} 的日期跨度`}>❙</span><button type="button" onClick={() => void removePlacement(task.id)} title="移回待安排区" aria-label={`取消安排 ${task.title}`}>×</button></div>)}</div>{day.dayType === 'makeup_workday' && <small>执行{weekdayNames[effectiveWeekday - 1]}安排</small>}{!day.title && status === 'holiday' && <small>{day.weekday >= 6 && day.dayType === 'normal' ? '周末' : '已设为放假'}</small>}</div>;
       })}</div></div>
       <div className="calendar-selection-summary"><span>{rangeStart ? `已选择：${rangeStart}${rangeEnd && rangeEnd !== rangeStart ? ` 至 ${rangeEnd}` : ''}` : '尚未选择日期'}</span><label>周末设为上课时执行<select value={makeupWeekday} onChange={event => setMakeupWeekday(Number(event.target.value) as Weekday)}>{weekdayNames.slice(0, 5).map((label, index) => <option key={label} value={index + 1}>{label}</option>)}</select></label></div>
       {selectedDay ? <DayEditor key={`${selectedDay.date}-${selectedDay.dayType}-${selectedDay.scheduleWeekday ?? ''}-${selectedDay.title ?? ''}`} day={selectedDay} onError={setError} /> : <aside className="day-editor empty-day-editor"><strong>选择一个日期</strong><p>点击月历日期后，可使用数字键快速设置状态。</p></aside>}
