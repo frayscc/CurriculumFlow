@@ -6,11 +6,11 @@
 
 ```bash
 docker run -d --name curriculumflow --restart unless-stopped \
-  -p 8080:8080 -v curriculumflow-data:/data \
-  --platform linux/amd64 frayscc/curriculumflow:latest
+  -p 8080:8080 -v "$(pwd)/data:/data" \
+  frayscc/curriculumflow:latest
 ```
 
-浏览器打开 `http://localhost:8080`。Docker 版把项目和附件保存到 SQLite，并通过 Docker 卷持久化。完整部署、升级、备份与云构建说明见 [Docker 部署文档](docs/DOCKER.md)。
+浏览器打开 `http://localhost:8080`。Docker 版把项目和附件保存到当前目录的 `data` 文件夹。完整部署、升级、备份与云构建说明见 [Docker 部署文档](docs/DOCKER.md)。
 
 ## 运行
 

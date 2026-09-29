@@ -3,6 +3,8 @@ dist/
 dist-portable/
 releases/
 coverage/
+data/*
+!data/.gitkeep
 .DS_Store
 *.local
 （九年级物理学科）2026-2027学年第一学期备课组工作计划.xlsx
