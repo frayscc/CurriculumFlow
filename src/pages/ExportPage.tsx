@@ -22,7 +22,7 @@ function WeeklyNoteEditor({ projectId, weekNumber, initial, onError }: {
 export function ExportPage() {
   const { projectId = '' } = useParams();
   const project = useLiveQuery(() => db.projects.get(projectId), [projectId]);
-  const currentVersion = useLiveQuery(() => db.planVersions.where('[projectId+version]').between([projectId, 0], [projectId, Infinity]).last(), [projectId]);
+  const currentVersion = useLiveQuery(async () => await db.planVersions.where('[projectId+version]').between([projectId, 0], [projectId, Infinity]).last() ?? null, [projectId]);
   const lessons = useLiveQuery(() => currentVersion ? db.scheduledLessons.where('planVersionId').equals(currentVersion.id).toArray() : Promise.resolve([] as ScheduledLesson[]), [currentVersion?.id]);
   const days = useLiveQuery(() => db.calendarDays.where('projectId').equals(projectId).sortBy('date'), [projectId]);
   const weeklyNotes = useLiveQuery(() => db.weeklyNotes.where('projectId').equals(projectId).toArray(), [projectId]);

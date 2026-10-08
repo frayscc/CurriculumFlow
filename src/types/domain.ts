@@ -30,7 +30,7 @@ export interface ScheduleOverride { projectId: ID; date: LocalDate; originalPeri
 export interface TeachingTask {
   id: ID; projectId: ID; order: number; title: string; type: TaskType; plannedPeriods: number;
   chapter?: string; section?: string; fixedDate?: LocalDate; fixedWeek?: number;
-  scheduledStartDate?: LocalDate; scheduledEndDate?: LocalDate; scheduleOrder?: number;
+  scheduledStartDate?: LocalDate; scheduledEndDate?: LocalDate; scheduleOrder?: number; scheduledDates?: LocalDate[];
   allowSplit: boolean; note?: string; examId?: ID; createdAt: Timestamp; updatedAt: Timestamp;
 }
 export interface ScheduledLessonSnapshot {

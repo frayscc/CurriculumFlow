@@ -1,7 +1,7 @@
 import { teachingWeekNumber } from '../../core/calendar/dates';
 import type { SemesterProject, TaskType, TeachingTask } from '../../types/domain';
 import { db as appDb } from '../schema';
-import { manualScheduleReason } from './manualSchedule';
+import { manualScheduleReason, timelineTables, unplaceTask } from './manualSchedule';
 
 export type TaskInput = Pick<TeachingTask, 'title' | 'type'> &
   Partial<Pick<TeachingTask, 'plannedPeriods' | 'allowSplit'>> &
@@ -48,7 +48,7 @@ export async function updateTask(taskId: string, input: TaskInput, database = ap
     if (!project) throw new Error('项目不存在。');
     const data = validate(input, project);
     if (data.examId && (await database.exams.get(data.examId))?.projectId !== old.projectId) throw new Error('关联考试不属于当前项目。');
-    const next: TeachingTask = { ...old, ...data, updatedAt: new Date().toISOString() };
+    const next: TeachingTask = { ...old, ...data, plannedPeriods: old.scheduledDates?.length || data.plannedPeriods || 1, updatedAt: new Date().toISOString() };
     await database.teachingTasks.put(next);
     const manualVersion = await database.planVersions.where('projectId').equals(old.projectId).filter(row => row.reason === manualScheduleReason).first();
     if (manualVersion) {
@@ -75,11 +75,12 @@ export async function reorderTasks(projectId: string, orderedIds: string[], data
 }
 
 export async function deleteTask(taskId: string, database = appDb): Promise<void> {
-  await database.transaction('rw', database.teachingTasks, database.actualRecords, database.changeLogs, database.planVersions, database.scheduledLessons, async () => {
+  await database.transaction('rw', [...timelineTables(database), database.actualRecords], async () => {
     const task = await database.teachingTasks.get(taskId);
     if (!task) return;
     const actualCount = await database.actualRecords.where('[projectId+taskId]').equals([task.projectId, taskId]).count();
     if (actualCount || task.examId) throw new Error('该内容关联了试卷资源或旧版执行记录，请先解除关联。');
+    await unplaceTask(taskId, database);
     const lessons = await database.scheduledLessons.where('[projectId+taskId]').equals([task.projectId, taskId]).toArray();
     await database.scheduledLessons.bulkDelete(lessons.map(row => row.id));
     const manualVersion = await database.planVersions.where('projectId').equals(task.projectId).filter(row => row.reason === manualScheduleReason).first();
@@ -99,7 +100,7 @@ export async function restoreDeletedTask(task: TeachingTask, database = appDb): 
     const position = Math.min(Math.max(task.order, 1), tasks.length + 1);
     const timestamp = new Date().toISOString();
     await database.teachingTasks.bulkPut(tasks.filter(item => item.order >= position).map(item => ({ ...item, order: item.order + 1, updatedAt: timestamp })));
-    await database.teachingTasks.add({ ...task, scheduledStartDate: undefined, scheduledEndDate: undefined, plannedPeriods: 1, order: position, updatedAt: timestamp });
+    await database.teachingTasks.add({ ...task, scheduledDates: undefined, scheduleOrder: undefined, scheduledStartDate: undefined, scheduledEndDate: undefined, plannedPeriods: 1, order: position, updatedAt: timestamp });
     await database.changeLogs.add({ id: crypto.randomUUID(), projectId: task.projectId, entityType: 'TeachingTask', entityId: task.id, action: 'restore', before: null, after: task, timestamp });
   });
 }

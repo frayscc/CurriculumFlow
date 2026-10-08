@@ -2,12 +2,13 @@ import { availablePeriods, normalizePeriods, type CalendarStatus } from '../../c
 import { parseLocalDate } from '../../core/calendar/dates';
 import type { CalendarDay, DayType, Weekday } from '../../types/domain';
 import { db as appDb } from '../schema';
+import { normalizeManualTimeline, timelineTables } from './manualSchedule';
 
 export type CalendarDayEdit = Pick<CalendarDay, 'dayType'> & Partial<Pick<CalendarDay, 'scheduleWeekday' | 'title' | 'note'>>;
 const validTypes: DayType[] = ['normal', 'holiday', 'makeup_workday', 'school_event', 'exam', 'unavailable'];
 
 export async function updateCalendarDay(projectId: string, date: string, edit: CalendarDayEdit, database = appDb) {
-  return database.transaction('rw', database.calendarDays, database.scheduleOverrides, async () => {
+  return database.transaction('rw', [...timelineTables(database), database.scheduleOverrides], async () => {
     const old = await database.calendarDays.get([projectId, date]);
     if (!old) throw new Error('日期不在项目的学期范围内。');
     if (!validTypes.includes(edit.dayType)) throw new Error('日期类型无效。');
@@ -24,6 +25,7 @@ export async function updateCalendarDay(projectId: string, date: string, edit: C
     if (edit.dayType === 'holiday' || edit.dayType === 'unavailable' || edit.dayType === 'exam' || edit.dayType === 'school_event') {
       await database.scheduleOverrides.delete([projectId, date]);
     }
+    await normalizeManualTimeline(projectId, database);
     return next;
   });
 }
@@ -37,7 +39,7 @@ export async function applyCalendarRange(
   if (edit.dayType === 'makeup_workday' && (!edit.scheduleWeekday || edit.scheduleWeekday < 1 || edit.scheduleWeekday > 7)) {
     throw new Error('调休日必须选择执行哪一天的课表。');
   }
-  await database.transaction('rw', database.calendarDays, database.scheduleOverrides, async () => {
+  await database.transaction('rw', [...timelineTables(database), database.scheduleOverrides], async () => {
     const days = await database.calendarDays.where('[projectId+date]').between([projectId, startDate], [projectId, endDate], true, true).toArray();
     if (!days.length || days[0].date !== startDate || days[days.length - 1].date !== endDate) {
       throw new Error('选择的日期范围不在当前学期内。');
@@ -52,6 +54,7 @@ export async function applyCalendarRange(
     if (edit.dayType === 'holiday' || edit.dayType === 'unavailable' || edit.dayType === 'exam' || edit.dayType === 'school_event') {
       await database.scheduleOverrides.where('[projectId+date]').between([projectId, startDate], [projectId, endDate], true, true).delete();
     }
+    await normalizeManualTimeline(projectId, database);
   });
 }
 
@@ -78,7 +81,7 @@ export async function applyCalendarStatusRange(
 ) {
   parseLocalDate(startDate); parseLocalDate(endDate);
   if (endDate < startDate) throw new Error('结束日期不能早于开始日期。');
-  await database.transaction('rw', database.calendarDays, database.scheduleOverrides, async () => {
+  await database.transaction('rw', [...timelineTables(database), database.scheduleOverrides], async () => {
     const days = await database.calendarDays.where('[projectId+date]').between([projectId, startDate], [projectId, endDate], true, true).toArray();
     if (!days.length || days[0].date !== startDate || days[days.length - 1].date !== endDate) throw new Error('选择的日期范围不在当前学期内。');
     const updated = days.map(day => {
@@ -94,6 +97,7 @@ export async function applyCalendarStatusRange(
     if (status === 'holiday' || status === 'exam' || status === 'default') {
       await database.scheduleOverrides.where('[projectId+date]').between([projectId, startDate], [projectId, endDate], true, true).delete();
     }
+    await normalizeManualTimeline(projectId, database);
   });
 }
 

@@ -67,6 +67,7 @@ export async function copyHistoricalProject(
       const maxWeek = teachingWeekNumber(data.startDate, data.endDate, project.weekStart ?? 7);
       await database.teachingTasks.bulkAdd(selected.map((task, index) => ({
         ...task, id: crypto.randomUUID(), projectId: id, order: index + 1,
+        scheduledDates: undefined, scheduleOrder: undefined, scheduledStartDate: undefined, scheduledEndDate: undefined,
         plannedPeriods: options.plannedPeriods ? task.plannedPeriods : 1,
         fixedDate: undefined, fixedWeek: task.fixedWeek && task.fixedWeek <= maxWeek ? task.fixedWeek : undefined,
         examId: task.examId ? examIdMap.get(task.examId) : undefined,

@@ -13,17 +13,28 @@ import { ExportPage } from './ExportPage';
 import { BackupPage } from './BackupPage';
 import { copyHistoricalProject, defaultCopyOptions, type CopyOptions } from '../db/repositories/history';
 import { readProjectDashboard } from '../db/repositories/dashboard';
-import { getSyncStatus, SYNC_EVENT, type SyncStatus } from '../db/serverSync';
+import { downloadLocalRecovery, getSyncStatus, readServerKeepingLocalCopy, SYNC_EVENT, type SyncStatus } from '../db/serverSync';
+import '../syncStatus.css';
 
 function StorageStatus() {
   const [status, setStatus] = useState<SyncStatus>(getSyncStatus());
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
   useEffect(() => {
     const listener = (event: Event) => setStatus((event as CustomEvent).detail);
     window.addEventListener(SYNC_EVENT, listener);
     return () => window.removeEventListener(SYNC_EVENT, listener);
   }, []);
-  const labels: Record<string, string> = { local: '本地教学工作空间', connecting: '正在连接 SQLite…', syncing: '正在保存…', synced: 'SQLite 已同步', error: 'SQLite 同步异常' };
-  return <span className={`storage-status ${status.state}`} title={status.message}>{labels[status.state] ?? labels.local}</span>;
+  async function run(action: () => Promise<void>) {
+    setBusy(true); setError('');
+    try { await action(); } catch (caught) { setError(caught instanceof Error ? caught.message : '操作失败'); }
+    finally { setBusy(false); }
+  }
+  const labels: Record<string, string> = { local: '本地教学工作空间', connecting: '正在连接 SQLite…', syncing: '正在保存…', synced: 'SQLite 已同步', error: 'SQLite 同步异常', conflict: '同步冲突：本地修改已保留' };
+  return <span className={`storage-status ${status.state}`} title={status.message}>{labels[status.state] ?? labels.local}
+    {status.state === 'conflict' && <span className="sync-conflict-actions"><span role="alert">{status.message}</span><button type="button" disabled={busy} onClick={() => void run(downloadLocalRecovery)}>下载本地副本</button><button type="button" disabled={busy} onClick={() => void run(readServerKeepingLocalCopy)}>保留副本并读取服务器</button><Link to="/backup">查看本地副本</Link></span>}
+    {error && <span role="alert">{error}</span>}
+  </span>;
 }
 
 function projectTitle(project: SemesterProject) {

@@ -1,4 +1,4 @@
-import { db } from './schema';
+import { CurriculumDatabase, db } from './schema';
 
 const syncedTableNames = [
   'projects', 'calendarDays', 'courseSchedules', 'scheduleOverrides', 'teachingTasks',
@@ -6,7 +6,7 @@ const syncedTableNames = [
   'planAnnotations', 'specialDuties', 'exams', 'examFiles', 'teachers', 'settings',
 ] as const;
 
-type SyncState = 'local' | 'connecting' | 'synced' | 'syncing' | 'error';
+type SyncState = 'local' | 'connecting' | 'synced' | 'syncing' | 'error' | 'conflict';
 export type SyncStatus = { state: SyncState; message: string };
 type Snapshot = { schemaVersion: 1; tables: Record<string, unknown[]> };
 type ServerState = {
@@ -20,7 +20,11 @@ export const SYNC_EVENT = 'curriculumflow-sync';
 let revision = 0;
 let lastFingerprint = '';
 let syncing: Promise<void> | undefined;
+let initializing: Promise<void> | undefined;
 let enabled = false;
+let initialized = false;
+let watching = false;
+type Checkpoint = { revision: number; fingerprint: string };
 let serverBlobs = new Map<string, { type: string; size: number }>();
 let currentStatus: SyncStatus = { state: window.location.protocol === 'file:' ? 'local' : 'connecting', message: '' };
 
@@ -37,36 +41,67 @@ function stableRows(rows: unknown[]) {
 
 async function exportSnapshot(): Promise<Snapshot> {
   const tables: Record<string, unknown[]> = {};
-  await Promise.all(syncedTableNames.map(async name => { tables[name] = stableRows(await db.table(name).toArray()); }));
+  await db.transaction('r', syncedTableNames.map(name => db.table(name)), async () => {
+    for (const name of syncedTableNames) tables[name] = stableRows(await db.table(name).toArray());
+  });
   return { schemaVersion: 1, tables };
 }
 
-async function importServerState(state: ServerState) {
+async function captureLocalState() {
+  return db.transaction('r', [...syncedTableNames.map(name => db.table(name)), db.fileBlobs], async () => {
+    const snapshot = await exportSnapshot();
+    const blobs = await db.fileBlobs.toArray();
+    const fingerprint = `${JSON.stringify(snapshot)}\n${JSON.stringify(blobs.map(item => [item.id, item.blob.type, item.blob.size]).sort())}`;
+    return { snapshot, blobs, fingerprint };
+  });
+}
+
+function serverFingerprint(state: ServerState) {
+  const tables: Record<string, unknown[]> = {};
+  for (const name of syncedTableNames) tables[name] = stableRows(state.snapshot.tables[name] ?? []);
+  return `${JSON.stringify({ schemaVersion: 1, tables })}\n${JSON.stringify(state.blobs.map(item => [item.id, item.type, item.size]).sort())}`;
+}
+
+async function checkpoint(fingerprint: string) {
+  lastFingerprint = fingerprint;
+  await db.syncMetadata.put({ key: 'checkpoint', value: { revision, fingerprint } satisfies Checkpoint });
+}
+
+function conflict() {
+  publish('conflict', '服务器与本机都有修改，已停止上传以保护两份数据。请先下载本地副本，再选择读取服务器。');
+}
+
+async function importServerState(state: ServerState, expectedFingerprint: string) {
   const fileBlobs = await Promise.all(state.blobs.map(async item => {
     const response = await fetch(`/api/blobs/${encodeURIComponent(item.id)}`);
     if (!response.ok) throw new Error(`附件 ${item.id} 下载失败`);
     return { id: item.id, blob: await response.blob() };
   }));
   await db.transaction('rw', db.tables, async () => {
-    for (const table of db.tables) await table.clear();
+    if ((await captureLocalState()).fingerprint !== expectedFingerprint) throw new Error('读取服务器期间本地发生了修改，已保留本地数据，请重试同步。');
+    for (const name of [...syncedTableNames, 'fileBlobs']) await db.table(name).clear();
     for (const name of syncedTableNames) {
       const rows = state.snapshot.tables[name] ?? [];
       if (rows.length) await db.table(name).bulkAdd(rows);
     }
     if (fileBlobs.length) await db.fileBlobs.bulkAdd(fileBlobs);
+    revision = state.revision;
+    await checkpoint((await captureLocalState()).fingerprint);
   });
   revision = state.revision;
   serverBlobs = new Map(state.blobs.map(item => [item.id, { type: item.type, size: item.size }]));
-  lastFingerprint = JSON.stringify(state.snapshot);
 }
 
 async function uploadCurrentState(force = false) {
-  const snapshot = await exportSnapshot();
-  const fingerprint = JSON.stringify(snapshot);
-  const localBlobs = await db.fileBlobs.toArray();
-  const blobFingerprint = JSON.stringify(localBlobs.map(item => [item.id, item.blob.type, item.blob.size]).sort());
-  const completeFingerprint = `${fingerprint}\n${blobFingerprint}`;
-  if (!force && completeFingerprint === lastFingerprint) return;
+  const { snapshot, blobs: localBlobs, fingerprint: completeFingerprint } = await captureLocalState();
+  if (!force && completeFingerprint === lastFingerprint) {
+    const latest = await fetch('/api/state', { cache: 'no-store' });
+    if (!latest.ok) throw new Error('无法读取服务器上的最新数据');
+    const state = await latest.json() as ServerState;
+    if (state.revision !== revision) await importServerState(state, completeFingerprint);
+    publish('synced');
+    return;
+  }
 
   publish('syncing');
   for (const item of localBlobs) {
@@ -79,30 +114,25 @@ async function uploadCurrentState(force = false) {
     serverBlobs.set(item.id, { type: item.blob.type || 'application/octet-stream', size: item.blob.size });
   }
 
-  let response = await fetch('/api/state', {
+  const response = await fetch('/api/state', {
     method: 'PUT', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ baseRevision: revision, snapshot, blobIds: localBlobs.map(item => item.id) }),
   });
   if (response.status === 409) {
-    const latest = await fetch('/api/state');
-    if (!latest.ok) throw new Error('无法读取服务器上的最新数据');
-    revision = ((await latest.json()) as ServerState).revision;
-    response = await fetch('/api/state', {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ baseRevision: revision, snapshot, blobIds: localBlobs.map(item => item.id) }),
-    });
+    conflict();
+    return;
   }
   if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || '同步失败');
   const result = await response.json();
   revision = result.revision;
-  lastFingerprint = completeFingerprint;
+  await checkpoint(completeFingerprint);
   publish('synced');
 }
 
 export function syncNow() {
-  if (!enabled) return Promise.resolve();
+  if (!enabled || currentStatus.state === 'conflict') return Promise.resolve();
   if (!syncing) {
-    syncing = uploadCurrentState().catch(error => {
+    syncing = (initialized ? uploadCurrentState() : initializeServerSync()).catch(error => {
       console.error('CurriculumFlow SQLite sync failed', error);
       publish('error', error instanceof Error ? error.message : '同步失败');
     }).finally(() => { syncing = undefined; });
@@ -110,27 +140,84 @@ export function syncNow() {
   return syncing;
 }
 
-export async function initializeServerSync() {
+export function initializeServerSync() {
+  if (!initializing) initializing = connectServerSync().finally(() => { initializing = undefined; });
+  return initializing;
+}
+
+async function connectServerSync() {
   if (window.location.protocol === 'file:') return publish('local');
+  enabled = true;
+  if (!watching) {
+    watching = true;
+    window.setInterval(() => void syncNow(), 1500);
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') void syncNow(); });
+  }
   publish('connecting');
   try {
     const response = await fetch('/api/state', { headers: { Accept: 'application/json' } });
-    if (response.status === 404 || response.status === 503) return publish('local');
-    if (response.ok && response.status !== 204 && !response.headers.get('content-type')?.includes('application/json')) return publish('local');
-    enabled = true;
+    if (response.status === 404 || (response.ok && response.status !== 204 && !response.headers.get('content-type')?.includes('application/json'))) { enabled = false; return publish('local'); }
+    const saved = (await db.syncMetadata.get('checkpoint'))?.value as Checkpoint | undefined;
+    if (saved) { revision = saved.revision; lastFingerprint = saved.fingerprint; }
+    const local = await captureLocalState();
     if (response.status === 204) {
+      revision = 0;
+      serverBlobs.clear();
       await uploadCurrentState(true);
     } else if (response.ok) {
-      await importServerState(await response.json() as ServerState);
-      const localBlobs = await db.fileBlobs.toArray();
-      lastFingerprint = `${lastFingerprint}\n${JSON.stringify(localBlobs.map(item => [item.id, item.blob.type, item.blob.size]).sort())}`;
-      publish('synced');
+      const state = await response.json() as ServerState;
+      const dirty = saved ? local.fingerprint !== saved.fingerprint : local.fingerprint !== serverFingerprint(state) && (local.blobs.length > 0 || Object.values(local.snapshot.tables).some(rows => rows.length > 0));
+      if (dirty) {
+        if (saved && state.revision === saved.revision) await uploadCurrentState();
+        else conflict();
+      } else { await importServerState(state, local.fingerprint); publish('synced'); }
     } else throw new Error(`服务器响应异常（${response.status}）`);
-    window.setInterval(() => void syncNow(), 1500);
-    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') void syncNow(); });
+    initialized = true;
   } catch (error) {
-    enabled = false;
     console.error('CurriculumFlow SQLite initialization failed', error);
     publish('error', error instanceof Error ? error.message : '无法连接 SQLite 服务');
   }
+}
+
+export async function readServerKeepingLocalCopy() {
+  const local = await captureLocalState();
+  await db.syncMetadata.put({ key: `recovery:${new Date().toISOString()}`, value: local });
+  const response = await fetch('/api/state', { cache: 'no-store' });
+  if (!response.ok) throw new Error('读取服务器失败，本地副本已保留。');
+  await importServerState(await response.json() as ServerState, local.fingerprint);
+  initialized = true;
+  publish('synced');
+}
+
+export async function buildLocalRecovery(key?: string) {
+  const { default: JSZip } = await import('jszip');
+  const local = key ? (await db.syncMetadata.get(key))?.value as Awaited<ReturnType<typeof captureLocalState>> | undefined : await captureLocalState();
+  if (!local) throw new Error('本地副本不存在。');
+  const zip = new JSZip();
+  zip.file('workspace.json', JSON.stringify(local.snapshot));
+  for (const item of local.blobs) zip.file(`files/${item.id}.bin`, await item.blob.arrayBuffer());
+  const temporary = new CurriculumDatabase(`recovery-export-${crypto.randomUUID()}`);
+  try {
+    await temporary.transaction('rw', temporary.tables, async () => {
+      for (const name of syncedTableNames) await temporary.table(name).bulkAdd(local.snapshot.tables[name] ?? []);
+      await temporary.fileBlobs.bulkAdd(local.blobs);
+    });
+    const { exportProjectBackup } = await import('./repositories/backup');
+    const errors: string[] = [];
+    for (const project of await temporary.projects.toArray()) {
+      try {
+        const result = await exportProjectBackup(project.id, temporary);
+        zip.file(`projects/${project.id}.zip`, await result.blob.arrayBuffer());
+      } catch (caught) { errors.push(`${project.id}: ${caught instanceof Error ? caught.message : '项目备份生成失败'}`); }
+    }
+    zip.file('README.txt', 'projects 文件夹中的 ZIP 可在应用的完整备份页面逐个恢复。workspace.json 和 files 保存完整原始副本。如存在 project-backup-errors.txt，请保留原始副本以便修复。');
+    if (errors.length) zip.file('project-backup-errors.txt', errors.join('\n'));
+    return { blob: await zip.generateAsync({ type: 'blob' }), filename: `CurriculumFlow_local_recovery_${Date.now()}.zip` };
+  } finally { await temporary.delete(); }
+}
+
+export async function downloadLocalRecovery(key?: string) {
+  const result = await buildLocalRecovery(key);
+  const { browserFileService } = await import('../core/files/browser');
+  browserFileService.saveFile(result.blob, result.filename);
 }

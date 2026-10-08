@@ -23,6 +23,7 @@ export class CurriculumDatabase extends Dexie {
   fileBlobs!: EntityTable<FileBlob, 'id'>;
   teachers!: EntityTable<Teacher, 'id'>;
   settings!: EntityTable<AppSetting, 'key'>;
+  syncMetadata!: Table<{ key: string; value: unknown }, string>;
 
   constructor(name = 'CurriculumFlow') {
     super(name);
@@ -59,6 +60,7 @@ export class CurriculumDatabase extends Dexie {
       specialDuties: 'id, projectId, [projectId+startDate], [projectId+endDate], teacherId',
       exams: 'id, projectId, [projectId+examDate], [projectId+examType], title',
     });
+    this.version(4).stores({ syncMetadata: 'key' });
   }
 }
 

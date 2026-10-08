@@ -1,6 +1,7 @@
 import { generateCalendarDays, parseLocalDate } from '../../core/calendar/dates';
 import type { SemesterProject, SharedCourseSlot, Weekday, WeeklyProgressSlot } from '../../types/domain';
 import { db as appDb, type CurriculumDatabase } from '../schema';
+import { normalizeManualTimeline, timelineTables } from './manualSchedule';
 
 export type ProjectInput = Pick<SemesterProject, 'schoolYear' | 'grade' | 'subject' | 'semester' | 'startDate' | 'endDate'>;
 
@@ -90,7 +91,7 @@ export async function updateCalendarPreferences(
 
 export async function updateProject(id: string, input: ProjectInput, database = appDb): Promise<SemesterProject> {
   const data = validateProjectInput(input);
-  return database.transaction('rw', database.projects, database.calendarDays, database.scheduleOverrides, async () => {
+  return database.transaction('rw', [...timelineTables(database), database.scheduleOverrides], async () => {
     const original = await database.projects.get(id);
     if (!original) throw new Error('项目不存在或已删除。');
     await ensureUnique(data, database, id);
@@ -104,6 +105,7 @@ export async function updateProject(id: string, input: ProjectInput, database = 
     if (obsolete.length) await database.calendarDays.bulkDelete(obsolete);
     await database.scheduleOverrides.where('projectId').equals(id).filter(row => !valid.has(row.date)).delete();
     await database.projects.put(next);
+    await normalizeManualTimeline(id, database);
     return next;
   });
 }

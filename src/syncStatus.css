@@ -1,0 +1,4 @@
+.storage-status.conflict { color: #ffdf8c; }
+.sync-conflict-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; max-width: 720px; padding: 10px; background: #24323b; border-radius: 8px; }
+.sync-conflict-actions button { border: 1px solid #b9c7ce; background: #fff; color: #203641; padding: 6px 9px; border-radius: 6px; cursor: pointer; }
+.sync-conflict-actions > span { flex-basis: 100%; line-height: 1.5; }

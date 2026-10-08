@@ -5,6 +5,7 @@ import { browserFileService } from '../core/files/browser';
 import { exportProjectBackup, prepareProjectBackup, restoreProjectBackup, type PreparedBackup } from '../db/repositories/backup';
 import { db } from '../db/schema';
 import type { ExamFile } from '../types/domain';
+import { downloadLocalRecovery } from '../db/serverSync';
 
 export function BackupPage() {
   const { projectId } = useParams();
@@ -16,6 +17,13 @@ export function BackupPage() {
   const [size, setSize] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const recoveries = useLiveQuery(() => db.syncMetadata.filter(row => row.key.startsWith('recovery:')).toArray(), []);
+  async function downloadRecovery(key: string) {
+    setBusy(true); setError('');
+    try { await downloadLocalRecovery(key); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : '副本下载失败。'); }
+    finally { setBusy(false); }
+  }
   async function exportBackup() {
     if (!projectId) return;
     setBusy(true); setError('');
@@ -45,5 +53,6 @@ export function BackupPage() {
     {projectId && project && <section className="section-panel"><h2>导出当前项目</h2><p>{project.schoolYear}学年 · {project.grade}{project.subject} · {project.semester}</p><p className="muted">附件 {files?.length ?? 0} 个，约 {(attachmentBytes / 1048576).toFixed(1)} MB。生成 ZIP 时浏览器需要额外内存；较大的项目请先确认设备有足够空间。</p><button className="button primary" disabled={busy} onClick={() => void exportBackup()}>{busy ? '处理中…' : '导出完整项目备份'}</button></section>}
     <section className="section-panel"><h2>从 ZIP 恢复项目</h2><p className="muted">先校验版本、关联数据和每个附件的 SHA-256，再显示摘要。恢复将创建一个新项目，并恢复备份内的全局文件命名设置；相同学年、年级、学科和学期的项目不能重复。</p><input aria-label="选择备份 ZIP" type="file" accept=".zip,application/zip" disabled={busy} onChange={event => void selectBackup(event.target.files?.[0])} />{busy && <p>正在处理，请保持此页面打开…</p>}
       {summary && <div className="backup-summary"><h3>校验通过，等待确认</h3><p><strong>{summary.project.schoolYear}学年 · {summary.project.grade}{summary.project.subject} · {summary.project.semester}</strong></p><p>{summary.project.startDate} 至 {summary.project.endDate} · ZIP {(size / 1048576).toFixed(1)} MB</p><p>教学内容 {summary.teachingTasks.length} 项 · 已安排 {summary.scheduledLessons.length} 天 · 考试 {summary.exams.length} 场 · 附件 {summary.examFiles.length} 个</p><button className="button primary" disabled={busy} onClick={() => void restore()}>确认恢复为新项目</button></div>}</section>
+    {!!recoveries?.length && <section className="section-panel"><h2>同步冲突保留的本地副本</h2><p className="muted">这些副本只保存在当前浏览器。下载后解压，projects 文件夹中的 ZIP 可在上方逐个恢复。</p>{recoveries.map(row => <p key={row.key}>{new Date(row.key.slice('recovery:'.length)).toLocaleString('zh-CN')} <button type="button" className="button secondary" disabled={busy} onClick={() => void downloadRecovery(row.key)}>下载副本</button></p>)}</section>}
   </main>;
 }
