@@ -4,7 +4,8 @@ import type { PlanVersion, ScheduledLesson, TeachingTask } from '../../types/dom
 import { db as appDb, type CurriculumDatabase } from '../schema';
 
 export const manualScheduleReason = '手动编排（最终版）';
-type Entry = { taskId: string; date: string };
+export type TimelineEntry = { taskId: string; date: string };
+type Entry = TimelineEntry;
 export function timelineTables(database: CurriculumDatabase) {
   return [database.projects, database.calendarDays, database.teachingTasks, database.planVersions, database.scheduledLessons, database.changeLogs];
 }
@@ -102,33 +103,39 @@ export async function moveTask(taskId: string, targetDate: string, database = ap
   });
 }
 
+// Shared by the live preview and the transactional save. Never writes data.
+export function previewTaskResize(taskId: string, endDate: string, slots: string[], entries: TimelineEntry[]): TimelineEntry[] {
+  requireTarget(slots, endDate);
+  const owned = entries.filter(entry => entry.taskId === taskId);
+  if (!owned.length) throw new Error('请先把这项内容拖入月历。');
+  if (endDate < owned[0].date) throw new Error('结束日期不能早于开始日期。');
+  const oldEnd = owned.at(-1)!.date;
+  let next: Entry[];
+  if (endDate >= oldEnd) {
+    const added = slots.slice(slots.indexOf(oldEnd) + 1, slots.indexOf(endDate) + 1);
+    const tail = entries.filter(entry => entry.date > oldEnd).map(entry => {
+      const date = slots[slots.indexOf(entry.date) + added.length];
+      if (!date) throw new Error('学期剩余上课日不足。');
+      return { ...entry, date };
+    });
+    next = [...entries.filter(entry => entry.date <= oldEnd), ...added.map(date => ({ taskId, date })), ...tail];
+  } else {
+    let removed = 0;
+    next = entries.flatMap(entry => {
+      if (entry.taskId === taskId && entry.date > endDate) { removed++; return []; }
+      return [{ ...entry, date: slots[slots.indexOf(entry.date) - removed] ?? entry.date }];
+    });
+    if (!next.some(entry => entry.taskId === taskId && entry.date === endDate)) throw new Error('请选择这项内容已占用的上课日作为缩短后的结束日期。');
+  }
+  return next;
+}
+
 export async function resizeTask(taskId: string, endDate: string, database = appDb) {
   await database.transaction('rw', timelineTables(database), async () => {
     const task = await database.teachingTasks.get(taskId);
     if (!task?.scheduledStartDate) throw new Error('请先把这项内容拖入月历。');
     const { slots, entries } = await load(task.projectId, database);
-    requireTarget(slots, endDate);
-    if (endDate < task.scheduledStartDate) throw new Error('结束日期不能早于开始日期。');
-    const owned = entries.filter(entry => entry.taskId === taskId);
-    const oldEnd = owned.at(-1)!.date;
-    let next: Entry[];
-    if (endDate >= oldEnd) {
-      const added = slots.slice(slots.indexOf(oldEnd) + 1, slots.indexOf(endDate) + 1);
-      const tail = entries.filter(entry => entry.date > oldEnd).map(entry => {
-        const date = slots[slots.indexOf(entry.date) + added.length];
-        if (!date) throw new Error('学期剩余上课日不足。');
-        return { ...entry, date };
-      });
-      next = [...entries.filter(entry => entry.date <= oldEnd), ...added.map(date => ({ taskId, date })), ...tail];
-    } else {
-      let removed = 0;
-      next = entries.flatMap(entry => {
-        if (entry.taskId === taskId && entry.date > endDate) { removed++; return []; }
-        return [{ ...entry, date: slots[slots.indexOf(entry.date) - removed] ?? entry.date }];
-      });
-      if (!next.some(entry => entry.taskId === taskId && entry.date === endDate)) throw new Error('请选择这项内容已占用的上课日作为缩短后的结束日期。');
-    }
-    await save(task.projectId, next, database);
+    await save(task.projectId, previewTaskResize(taskId, endDate, slots, entries), database);
   });
 }
 

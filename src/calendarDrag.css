@@ -28,6 +28,50 @@
   width: calc(100% - 18px);
 }
 
+/* Only the small, absolutely positioned bars resize; the month grid stays still.
+   Keep the transition after release too, so committing cannot snap mid-motion. */
+.term-calendar .calendar-task-bar {
+  transition: width 120ms cubic-bezier(.2, .7, .3, 1);
+}
+
+.term-calendar .calendar-task-bar.resize-preview {
+  outline: 2px solid #397a9c;
+  outline-offset: 1px;
+  z-index: 8;
+}
+
+.term-calendar .calendar-task-bar.timeline-preview {
+  animation: timeline-arrive 140ms ease-out;
+}
+
+.term-calendar .term-day.resize-target { box-shadow: inset 0 0 0 2px #397a9c; }
+.term-calendar .term-day.resize-invalid { box-shadow: inset 0 0 0 2px #b43b49; }
+
+.resize-feedback {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 100;
+  max-width: calc(100vw - 32px);
+  padding: 10px 16px;
+  border-radius: 12px;
+  color: #fff;
+  background: #24576e;
+  box-shadow: 0 4px 16px #162c3826;
+  pointer-events: none;
+}
+.resize-feedback.invalid { background: #963642; }
+
+@keyframes timeline-arrive {
+  from { opacity: .55; transform: translateY(3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .term-calendar .calendar-task-bar { transition: none; animation: none; }
+}
+
 @media (max-width: 720px) {
   .term-calendar .term-calendar-grid .term-day { min-height: 92px; }
   .term-calendar .day-schedule-items {

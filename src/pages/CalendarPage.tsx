@@ -5,7 +5,7 @@ import { calendarStatus, type CalendarStatus } from '../core/calendar/availabili
 import { orderedWeekdays, weekdayOf } from '../core/calendar/dates';
 import { applyCalendarStatusRange, updateCalendarDay } from '../db/repositories/calendar';
 import { createTask } from '../db/repositories/tasks';
-import { manualScheduleReason, moveTask, normalizeManualTimeline, resizeTask, unplaceTask } from '../db/repositories/manualSchedule';
+import { manualScheduleReason, moveTask, normalizeManualTimeline, previewTaskResize, resizeTask, unplaceTask, type TimelineEntry } from '../db/repositories/manualSchedule';
 import { db } from '../db/schema';
 import type { CalendarDay, TaskType, TeachingTask, Weekday } from '../types/domain';
 import '../calendarDrag.css';
@@ -77,8 +77,9 @@ export function CalendarPage() {
   const [stretchingTaskId, setStretchingTaskId] = useState('');
   const [placingTaskId, setPlacingTaskId] = useState('');
   const [draggingTask, setDraggingTask] = useState(false);
+  const [resizePreview, setResizePreview] = useState<{ taskId: string; date?: string; entries: TimelineEntry[]; error?: string; saving?: boolean } | null>(null);
   const upgrading = useRef(false);
-  const pointerResize = useRef<{ taskId: string; pointerId: number; x: number; y: number; moved: boolean; element: HTMLElement } | null>(null);
+  const pointerResize = useRef<{ taskId: string; pointerId: number; x: number; y: number; moved: boolean; element: HTMLElement; entries: TimelineEntry[]; slots: string[]; target?: string } | null>(null);
   const calendarGrid = useRef<HTMLDivElement>(null);
   const suppressPointerClick = useRef(false);
 
@@ -86,7 +87,10 @@ export function CalendarPage() {
   const months = useMemo(() => [...new Set((days ?? []).map(day => day.date.slice(0, 7)))], [days]);
   const dayByDate = useMemo(() => new Map((days ?? []).map(day => [day.date, day])), [days]);
   const taskById = useMemo(() => new Map((tasks ?? []).map(task => [task.id, task])), [tasks]);
-  const lessonTaskByDate = useMemo(() => new Map((scheduledLessons ?? []).map(lesson => [lesson.date, lesson.taskId])), [scheduledLessons]);
+  const lessonTaskByDate = useMemo(() => new Map((resizePreview?.entries ?? scheduledLessons ?? []).map(lesson => [lesson.date, lesson.taskId])), [scheduledLessons, resizePreview]);
+  useEffect(() => {
+    if (resizePreview?.saving && scheduledLessons?.length === resizePreview.entries.length && resizePreview.entries.every(entry => scheduledLessons.some(lesson => lesson.taskId === entry.taskId && lesson.date === entry.date))) setResizePreview(null);
+  }, [resizePreview, scheduledLessons]);
   const calendarCells = useMemo(() => {
     if (!activeMonth) return [] as Array<string | null>;
     const [year, monthNumber] = activeMonth.split('-').map(Number);
@@ -112,8 +116,12 @@ export function CalendarPage() {
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') { pointerResize.current = null; setDraggingTask(false); setStretchingTaskId(''); setPlacingTaskId(''); setNotice(''); return; }
-      if (stretchingTaskId || placingTaskId) return;
+      if (event.key === 'Escape') {
+        const current = pointerResize.current;
+        if (current?.element.hasPointerCapture?.(current.pointerId)) current.element.releasePointerCapture(current.pointerId);
+        pointerResize.current = null; setResizePreview(value => value?.saving ? value : null); setDraggingTask(false); setStretchingTaskId(''); setPlacingTaskId(''); setNotice(''); return;
+      }
+      if (stretchingTaskId || placingTaskId || pointerResize.current) return;
       const target = event.target as HTMLElement | null;
       if (target?.matches('input, textarea, select') || target?.isContentEditable || event.metaKey || event.ctrlKey || event.altKey) return;
       const status = shortcutStatus[event.key];
@@ -150,6 +158,15 @@ export function CalendarPage() {
       current.moved = true;
       setDraggingTask(true);
       if (event.cancelable) event.preventDefault();
+      const date = targetDate(event);
+      if (date === current.target) return;
+      current.target = date;
+      try {
+        if (!date) throw new Error('请在月历日期内松开手柄。');
+        setResizePreview({ taskId: current.taskId, date, entries: previewTaskResize(current.taskId, date, current.slots, current.entries) });
+      } catch (caught) {
+        setResizePreview({ taskId: current.taskId, date, entries: current.entries, error: caught instanceof Error ? caught.message : '无法调整到这一天。' });
+      }
     }
     function finish(event: globalThis.PointerEvent) {
       const current = pointerResize.current;
@@ -160,16 +177,22 @@ export function CalendarPage() {
       if (!current.moved) return;
       suppressPointerClick.current = true;
       const date = targetDate(event);
-      if (!date) { setNotice('已取消跨度调整：请在月历日期内松开手柄。'); return; }
+      if (!date) { setResizePreview(null); setNotice('已取消跨度调整：请在月历日期内松开手柄。'); return; }
+      try {
+        setResizePreview({ taskId: current.taskId, date, entries: previewTaskResize(current.taskId, date, current.slots, current.entries), saving: true });
+      } catch (caught) {
+        setResizePreview(null); setError(caught instanceof Error ? caught.message : '跨度调整失败。'); return;
+      }
       void resizeTask(current.taskId, date).then(() => {
         setStretchingTaskId(''); setError(''); setNotice(`结束日期已调整为 ${date}，后续安排已重排。`);
-      }).catch(caught => setError(caught instanceof Error ? caught.message : '跨度调整失败。'));
+      }).catch(caught => { setResizePreview(null); setError(caught instanceof Error ? caught.message : '跨度调整失败。'); });
     }
     function cancel() {
       const current = pointerResize.current;
       pointerResize.current = null;
       if (current?.element.hasPointerCapture?.(current.pointerId)) current.element.releasePointerCapture(current.pointerId);
       setDraggingTask(false);
+      setResizePreview(value => value?.saving ? value : null);
     }
     window.addEventListener('pointermove', move, { passive: false, capture: true });
     window.addEventListener('pointerup', finish, true);
@@ -184,12 +207,14 @@ export function CalendarPage() {
   }, []);
 
   function startPointerResize(event: PointerEvent<HTMLElement>, task: TeachingTask) {
-    if (event.button !== 0) return;
+    if (event.button !== 0 || resizePreview?.saving) return;
     event.preventDefault();
     event.stopPropagation();
-    event.currentTarget.setPointerCapture?.(event.pointerId);
+    // A later segment can disappear while shrinking; keep capture on the grid.
+    const element = calendarGrid.current ?? event.currentTarget;
+    element.setPointerCapture?.(event.pointerId);
     suppressPointerClick.current = false;
-    pointerResize.current = { taskId: task.id, pointerId: event.pointerId, x: event.clientX, y: event.clientY, moved: false, element: event.currentTarget };
+    pointerResize.current = { taskId: task.id, pointerId: event.pointerId, x: event.clientX, y: event.clientY, moved: false, element, entries: (scheduledLessons ?? []).map(({ taskId, date }) => ({ taskId, date })).sort((a, b) => a.date.localeCompare(b.date)), slots: (days ?? []).filter(day => day.date >= project!.startDate && day.date <= project!.endDate && calendarStatus(day) === 'teaching').map(day => day.date) };
     setStretchingTaskId('');
     setPlacingTaskId('');
   }
@@ -288,6 +313,9 @@ export function CalendarPage() {
     <div className="page-heading"><div><p className="eyebrow">{project.grade}{project.subject} · {project.semester}</p><h1>校历与教学安排</h1><p className="muted">像剪辑时间轴一样编排：插入或移动内容会自动重排后续内容，拖动右侧手柄可调整跨度。</p></div></div>
     {error && <p role="alert" className="error page-error">{error}</p>}
     {notice && <p role="status" className="calendar-notice">{notice}</p>}
+    {resizePreview && <div role="status" className={`resize-feedback ${resizePreview.error ? 'invalid' : ''}`}>
+      {resizePreview.error ?? `${resizePreview.saving ? '保存中' : '跨度预览'}：${resizePreview.date} · ${resizePreview.entries.filter(entry => entry.taskId === resizePreview.taskId).length} 个上课日`}
+    </div>}
 
     <section className="section-panel calendar-section schedule-palette-section">
       <div className="section-heading"><div><h2>待安排教学内容</h2><p>拖到某一天即从当天插入；该日及之后的内容顺延，之前的安排保留。</p></div><Link to={`/projects/${projectId}/tasks`}>管理全部内容 →</Link></div>
@@ -315,12 +343,12 @@ export function CalendarPage() {
           if (!nextDate || lessonTaskByDate.get(nextDate) !== taskId) break;
           segmentSpan += 1;
         }
-        return <div role="button" tabIndex={0} key={date} data-calendar-date={date} className={`term-day ${status} ${selectedDate === date ? 'selected' : ''} ${inRange ? 'in-range' : ''} ${stretchingTaskId ? 'stretch-target' : ''}`}
+        return <div role="button" tabIndex={0} key={date} data-calendar-date={date} className={`term-day ${status} ${selectedDate === date ? 'selected' : ''} ${inRange ? 'in-range' : ''} ${stretchingTaskId ? 'stretch-target' : ''} ${resizePreview?.date === date ? resizePreview.error ? 'resize-invalid' : 'resize-target' : ''}`}
           onClick={event => void clickCalendarDate(date, event)}
           onKeyDown={event => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); event.currentTarget.click(); } }}
           onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; }} onDrop={event => void dropOnDate(event, date)}>
           <span className="day-number">{dateParts(date).day}</span><span className="day-kind">{statusLabels[status]}</span>{day.title && <strong>{day.title}</strong>}
-          <div className="day-schedule-items">{startingTask && <div className={`calendar-task-bar ${startingTask.type} ${stretchingTaskId === startingTask.id ? 'stretching' : ''}`} style={{ '--task-span': segmentSpan } as CSSProperties} onClick={event => event.stopPropagation()}>
+          <div className="day-schedule-items">{startingTask && <div data-task-id={startingTask.id} className={`calendar-task-bar ${startingTask.type} ${stretchingTaskId === startingTask.id ? 'stretching' : ''} ${resizePreview?.taskId === startingTask.id ? 'resize-preview' : ''} ${resizePreview ? 'timeline-preview' : ''}`} style={{ '--task-span': segmentSpan } as CSSProperties} onClick={event => event.stopPropagation()}>
             <span className="task-title-drag" title="拖动整张卡片" draggable onDragStart={event => startDrag(event, startingTask, 'move')}>{startingTask.title}</span>
             <span className="resize-handle" role="button" tabIndex={0} draggable={false} onDragStart={event => event.preventDefault()} onPointerDown={event => startPointerResize(event, startingTask)}
               onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); event.currentTarget.click(); } }}

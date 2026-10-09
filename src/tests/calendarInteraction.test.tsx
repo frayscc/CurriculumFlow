@@ -9,7 +9,7 @@ import { ExportPage } from '../pages/ExportPage';
 import { db } from '../db/schema';
 import { createProject } from '../db/repositories/projects';
 import { createTask } from '../db/repositories/tasks';
-import { moveTask } from '../db/repositories/manualSchedule';
+import { moveTask, resizeTask } from '../db/repositories/manualSchedule';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root;
@@ -57,7 +57,7 @@ it('keeps resizing enabled after clicking the handle and captures the pointer', 
   const { a } = await fixture();
   const handle = container.querySelector('[aria-label="调整 课程A 的日期跨度"]') as HTMLElement;
   const capture = vi.fn();
-  Object.assign(handle, { setPointerCapture: capture });
+  Object.assign(container.querySelector('.term-calendar-grid')!, { setPointerCapture: capture });
   await act(async () => handle.click());
   expect(container.querySelector('.is-stretching')).not.toBeNull();
   const down = pointer('pointerdown', 10, 10);
@@ -80,6 +80,57 @@ it('uses cell geometry when capture or a spanning bar retargets events to the ol
   await act(async () => handle.dispatchEvent(pointer('pointerup', 150, 50)));
   await vi.waitFor(async () => expect((await db.teachingTasks.get(a.id))?.scheduledEndDate).toBe('2026-09-02'));
   expect((await db.teachingTasks.get(b.id))?.scheduledStartDate).toBe('2026-09-03');
+});
+
+it('previews growing and shrinking plus downstream ripple before saving', async () => {
+  const { a, b } = await fixture();
+  const bar = () => day('1').querySelector<HTMLElement>('.calendar-task-bar')!;
+  await act(async () => bar().querySelector('.resize-handle')!.dispatchEvent(pointer('pointerdown', 10, 10)));
+  await act(async () => day('3').dispatchEvent(pointer('pointermove', 50, 50)));
+  expect(bar().style.getPropertyValue('--task-span')).toBe('3');
+  expect(bar().classList.contains('resize-preview')).toBe(true);
+  expect(day('4').querySelector('.calendar-task-bar')?.getAttribute('data-task-id')).toBe(b.id);
+  expect(container.querySelector('.resize-feedback')?.textContent).toContain('3 个上课日');
+  expect((await db.teachingTasks.get(a.id))?.scheduledEndDate).toBe('2026-09-01');
+  expect((await db.teachingTasks.get(b.id))?.scheduledStartDate).toBe('2026-09-02');
+  await act(async () => day('2').dispatchEvent(pointer('pointermove', 40, 50)));
+  expect(bar().style.getPropertyValue('--task-span')).toBe('2');
+  expect(day('3').querySelector('.calendar-task-bar')?.getAttribute('data-task-id')).toBe(b.id);
+  await act(async () => day('2').dispatchEvent(pointer('pointerup', 40, 50)));
+  await vi.waitFor(() => expect(container.querySelector('.resize-feedback')).toBeNull());
+  expect((await db.teachingTasks.get(a.id))?.scheduledEndDate).toBe('2026-09-02');
+});
+
+it('keeps capture when shrinking removes the source segment across a weekend', async () => {
+  const { a, b } = await fixture();
+  await act(async () => resizeTask(a.id, '2026-09-07'));
+  await vi.waitFor(() => expect(day('7').querySelector('.resize-handle')).not.toBeNull());
+  const handle = day('7').querySelector('.resize-handle')!;
+  const grid = container.querySelector('.term-calendar-grid')!;
+  const release = vi.fn();
+  Object.assign(grid, { setPointerCapture: vi.fn(), hasPointerCapture: () => true, releasePointerCapture: release });
+  await act(async () => handle.dispatchEvent(pointer('pointerdown', 10, 10)));
+  await act(async () => day('2').dispatchEvent(pointer('pointermove', 50, 50)));
+  expect(handle.isConnected).toBe(false);
+  expect(day('1').querySelector<HTMLElement>('.calendar-task-bar')!.style.getPropertyValue('--task-span')).toBe('2');
+  await act(async () => day('2').dispatchEvent(pointer('pointerup', 50, 50)));
+  expect(release).toHaveBeenCalledWith(1);
+  await vi.waitFor(async () => expect((await db.teachingTasks.get(a.id))?.scheduledEndDate).toBe('2026-09-02'));
+  expect((await db.teachingTasks.get(b.id))?.scheduledStartDate).toBe('2026-09-03');
+});
+
+it('rolls back the preview on invalid dates and cancellation without writes', async () => {
+  const { a } = await fixture();
+  await act(async () => day('1').querySelector('.resize-handle')!.dispatchEvent(pointer('pointerdown', 10, 10)));
+  await act(async () => day('3').dispatchEvent(pointer('pointermove', 50, 50)));
+  await act(async () => day('5').dispatchEvent(pointer('pointermove', 60, 50)));
+  expect(container.querySelector('.resize-feedback.invalid')?.textContent).toContain('不能安排');
+  expect(day('1').querySelector<HTMLElement>('.calendar-task-bar')!.style.getPropertyValue('--task-span')).toBe('1');
+  await act(async () => day('3').dispatchEvent(pointer('pointermove', 70, 50)));
+  await act(async () => window.dispatchEvent(new Event('blur')));
+  expect(container.querySelector('.resize-feedback')).toBeNull();
+  expect(day('1').querySelector<HTMLElement>('.calendar-task-bar')!.style.getPropertyValue('--task-span')).toBe('1');
+  expect((await db.teachingTasks.get(a.id))?.scheduledEndDate).toBe('2026-09-01');
 });
 
 it('blocks native drag ghosts on the resize control', async () => {
