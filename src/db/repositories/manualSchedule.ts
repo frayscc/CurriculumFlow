@@ -86,21 +86,27 @@ export async function moveTask(taskId: string, targetDate: string, database = ap
     const task = await database.teachingTasks.get(taskId);
     if (!task) throw new Error('教学内容不存在。');
     const { slots, entries } = await load(task.projectId, database);
-    requireTarget(slots, targetDate);
-    const remaining = removeAndClose(entries, taskId, slots);
-    const duration = entries.filter(entry => entry.taskId === taskId).length || task.plannedPeriods;
-    const targetIndex = slots.indexOf(targetDate);
-    if (targetIndex + duration > slots.length) throw new Error('学期剩余上课日不足。');
-    const prefix = remaining.filter(entry => entry.date < targetDate);
-    const suffix = remaining.filter(entry => entry.date >= targetDate).map(entry => {
-      const shifted = slots[slots.indexOf(entry.date) + duration];
-      if (!shifted) throw new Error('学期剩余上课日不足。');
-      return { ...entry, date: shifted };
-    });
-    const inserted = slots.slice(targetIndex, targetIndex + duration).map(date => ({ taskId, date }));
-    await save(task.projectId, [...prefix, ...inserted, ...suffix], database);
+    await save(task.projectId, previewTaskMove(taskId, targetDate, slots, entries, task.plannedPeriods), database);
     await database.changeLogs.add({ id: crypto.randomUUID(), projectId: task.projectId, entityType: 'TeachingTask', entityId: taskId, action: 'move', before: task, after: { targetDate }, timestamp: new Date().toISOString() });
   });
+}
+
+export function previewTaskMove(taskId: string, targetDate: string, slots: string[], entries: TimelineEntry[], plannedPeriods = 1): TimelineEntry[] {
+  requireTarget(slots, targetDate);
+  const owned = entries.filter(entry => entry.taskId === taskId);
+  // Dropping back on its start must not compact a previously split course.
+  if (owned[0]?.date === targetDate) return entries;
+  const remaining = removeAndClose(entries, taskId, slots);
+  const duration = owned.length || plannedPeriods;
+  const targetIndex = slots.indexOf(targetDate);
+  if (targetIndex + duration > slots.length) throw new Error('学期剩余上课日不足。');
+  const prefix = remaining.filter(entry => entry.date < targetDate);
+  const suffix = remaining.filter(entry => entry.date >= targetDate).map(entry => {
+    const shifted = slots[slots.indexOf(entry.date) + duration];
+    if (!shifted) throw new Error('学期剩余上课日不足。');
+    return { ...entry, date: shifted };
+  });
+  return [...prefix, ...slots.slice(targetIndex, targetIndex + duration).map(date => ({ taskId, date })), ...suffix];
 }
 
 // Shared by the live preview and the transactional save. Never writes data.

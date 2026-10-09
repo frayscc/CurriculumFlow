@@ -5,7 +5,7 @@ import { calendarStatus, type CalendarStatus } from '../core/calendar/availabili
 import { orderedWeekdays, weekdayOf } from '../core/calendar/dates';
 import { applyCalendarStatusRange, updateCalendarDay } from '../db/repositories/calendar';
 import { createTask } from '../db/repositories/tasks';
-import { manualScheduleReason, moveTask, normalizeManualTimeline, previewTaskResize, resizeTask, unplaceTask, type TimelineEntry } from '../db/repositories/manualSchedule';
+import { manualScheduleReason, moveTask, normalizeManualTimeline, previewTaskMove, previewTaskResize, resizeTask, unplaceTask, type TimelineEntry } from '../db/repositories/manualSchedule';
 import { db } from '../db/schema';
 import type { CalendarDay, TaskType, TeachingTask, Weekday } from '../types/domain';
 import '../calendarDrag.css';
@@ -13,6 +13,16 @@ import '../calendarDrag.css';
 const weekdayNames = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
 const statusLabels: Record<CalendarStatus, string> = { teaching: '上课', holiday: '放假', exam: '考试' };
 const shortcutStatus: Record<string, CalendarStatus | 'default'> = { '1': 'teaching', '2': 'holiday', '3': 'exam', '0': 'default' };
+
+function pointerDate(grid: HTMLElement | null, event: { clientX: number; clientY: number; target: EventTarget | null }) {
+  const cells = [...(grid?.querySelectorAll<HTMLElement>('[data-calendar-date]') ?? [])];
+  const bounds = cells.map(cell => ({ cell, rect: cell.getBoundingClientRect() }));
+  const hit = bounds.find(({ rect }) => event.clientX >= rect.left && event.clientX < rect.right && event.clientY >= rect.top && event.clientY < rect.bottom);
+  if (hit) return hit.cell.dataset.calendarDate;
+  if (bounds.some(({ rect }) => rect.width > 0)) return undefined;
+  const target = document.elementFromPoint?.(event.clientX, event.clientY) ?? event.target;
+  return target instanceof Element ? target.closest<HTMLElement>('[data-calendar-date]')?.dataset.calendarDate : undefined;
+}
 
 function dateParts(date: string) {
   const [year, month, day] = date.split('-').map(Number);
@@ -77,9 +87,9 @@ export function CalendarPage() {
   const [stretchingTaskId, setStretchingTaskId] = useState('');
   const [placingTaskId, setPlacingTaskId] = useState('');
   const [draggingTask, setDraggingTask] = useState(false);
-  const [resizePreview, setResizePreview] = useState<{ taskId: string; date?: string; entries: TimelineEntry[]; error?: string; saving?: boolean } | null>(null);
+  const [resizePreview, setResizePreview] = useState<{ taskId: string; mode: 'move' | 'resize'; date?: string; entries: TimelineEntry[]; error?: string; saving?: boolean } | null>(null);
   const upgrading = useRef(false);
-  const pointerResize = useRef<{ taskId: string; pointerId: number; x: number; y: number; moved: boolean; element: HTMLElement; entries: TimelineEntry[]; slots: string[]; target?: string } | null>(null);
+  const pointerResize = useRef<{ taskId: string; mode: 'move' | 'resize'; offset: number; pointerId: number; x: number; y: number; moved: boolean; element: HTMLElement; entries: TimelineEntry[]; slots: string[]; target?: string } | null>(null);
   const calendarGrid = useRef<HTMLDivElement>(null);
   const suppressPointerClick = useRef(false);
 
@@ -142,14 +152,16 @@ export function CalendarPage() {
     function targetDate(event: globalThis.PointerEvent) {
       // A wide bar belongs to its first day in the DOM. Hit-test the date cells,
       // not the bar, so pointer capture and overlapping segments cannot lie.
-      const cells = [...(calendarGrid.current?.querySelectorAll<HTMLElement>('[data-calendar-date]') ?? [])];
-      for (const cell of cells) {
-        const bounds = cell.getBoundingClientRect();
-        if (event.clientX >= bounds.left && event.clientX < bounds.right && event.clientY >= bounds.top && event.clientY < bounds.bottom) return cell.dataset.calendarDate;
-      }
-      if (cells.some(cell => cell.getBoundingClientRect().width > 0)) return undefined;
-      const target = document.elementFromPoint?.(event.clientX, event.clientY) ?? event.target;
-      return target instanceof Element ? target.closest<HTMLElement>('[data-calendar-date]')?.dataset.calendarDate : undefined;
+      return pointerDate(calendarGrid.current, event);
+    }
+    function projectPreview(current: NonNullable<typeof pointerResize.current>, date: string) {
+      if (current.mode === 'resize') return { date, entries: previewTaskResize(current.taskId, date, current.slots, current.entries) };
+      const index = current.slots.indexOf(date);
+      // Reject holidays even if subtracting the grab offset would land on a workday.
+      if (index < 0) return { date, entries: previewTaskMove(current.taskId, date, current.slots, current.entries) };
+      const start = current.slots[index - current.offset];
+      if (!start) throw new Error('课程起始日期不能早于学期开始。');
+      return { date: start, entries: previewTaskMove(current.taskId, start, current.slots, current.entries) };
     }
     function move(event: globalThis.PointerEvent) {
       const current = pointerResize.current;
@@ -162,10 +174,10 @@ export function CalendarPage() {
       if (date === current.target) return;
       current.target = date;
       try {
-        if (!date) throw new Error('请在月历日期内松开手柄。');
-        setResizePreview({ taskId: current.taskId, date, entries: previewTaskResize(current.taskId, date, current.slots, current.entries) });
+        if (!date) throw new Error('请在月历日期内松开。');
+        setResizePreview({ taskId: current.taskId, mode: current.mode, ...projectPreview(current, date) });
       } catch (caught) {
-        setResizePreview({ taskId: current.taskId, date, entries: current.entries, error: caught instanceof Error ? caught.message : '无法调整到这一天。' });
+        setResizePreview({ taskId: current.taskId, mode: current.mode, date, entries: current.entries, error: caught instanceof Error ? caught.message : '无法调整到这一天。' });
       }
     }
     function finish(event: globalThis.PointerEvent) {
@@ -177,14 +189,16 @@ export function CalendarPage() {
       if (!current.moved) return;
       suppressPointerClick.current = true;
       const date = targetDate(event);
-      if (!date) { setResizePreview(null); setNotice('已取消跨度调整：请在月历日期内松开手柄。'); return; }
+      if (!date) { setResizePreview(null); setNotice(`已取消${current.mode === 'move' ? '课程移动' : '跨度调整'}：请在月历日期内松开。`); return; }
+      let preview;
       try {
-        setResizePreview({ taskId: current.taskId, date, entries: previewTaskResize(current.taskId, date, current.slots, current.entries), saving: true });
+        preview = projectPreview(current, date);
+        setResizePreview({ taskId: current.taskId, mode: current.mode, ...preview, saving: true });
       } catch (caught) {
         setResizePreview(null); setError(caught instanceof Error ? caught.message : '跨度调整失败。'); return;
       }
-      void resizeTask(current.taskId, date).then(() => {
-        setStretchingTaskId(''); setError(''); setNotice(`结束日期已调整为 ${date}，后续安排已重排。`);
+      void (current.mode === 'move' ? moveTask(current.taskId, preview.date) : resizeTask(current.taskId, preview.date)).then(() => {
+        setStretchingTaskId(''); setError(''); setNotice(`${current.mode === 'move' ? '整门课程已移动，开始日期' : '结束日期'}已调整为 ${preview.date}，后续安排已重排。`);
       }).catch(caught => { setResizePreview(null); setError(caught instanceof Error ? caught.message : '跨度调整失败。'); });
     }
     function cancel() {
@@ -206,7 +220,7 @@ export function CalendarPage() {
     };
   }, []);
 
-  function startPointerResize(event: PointerEvent<HTMLElement>, task: TeachingTask) {
+  function startPointerResize(event: PointerEvent<HTMLElement>, task: TeachingTask, mode: 'move' | 'resize' = 'resize') {
     if (event.button !== 0 || resizePreview?.saving) return;
     event.preventDefault();
     event.stopPropagation();
@@ -214,7 +228,10 @@ export function CalendarPage() {
     const element = calendarGrid.current ?? event.currentTarget;
     element.setPointerCapture?.(event.pointerId);
     suppressPointerClick.current = false;
-    pointerResize.current = { taskId: task.id, pointerId: event.pointerId, x: event.clientX, y: event.clientY, moved: false, element, entries: (scheduledLessons ?? []).map(({ taskId, date }) => ({ taskId, date })).sort((a, b) => a.date.localeCompare(b.date)), slots: (days ?? []).filter(day => day.date >= project!.startDate && day.date <= project!.endDate && calendarStatus(day) === 'teaching').map(day => day.date) };
+    const slots = (days ?? []).filter(day => day.date >= project!.startDate && day.date <= project!.endDate && calendarStatus(day) === 'teaching').map(day => day.date);
+    const grabbed = pointerDate(calendarGrid.current, event) ?? task.scheduledStartDate!;
+    const offset = mode === 'move' ? Math.max(0, slots.indexOf(grabbed) - slots.indexOf(task.scheduledStartDate!)) : 0;
+    pointerResize.current = { taskId: task.id, mode, offset, pointerId: event.pointerId, x: event.clientX, y: event.clientY, moved: false, element, entries: (scheduledLessons ?? []).map(({ taskId, date }) => ({ taskId, date })).sort((a, b) => a.date.localeCompare(b.date)), slots };
     setStretchingTaskId('');
     setPlacingTaskId('');
   }
@@ -314,7 +331,7 @@ export function CalendarPage() {
     {error && <p role="alert" className="error page-error">{error}</p>}
     {notice && <p role="status" className="calendar-notice">{notice}</p>}
     {resizePreview && <div role="status" className={`resize-feedback ${resizePreview.error ? 'invalid' : ''}`}>
-      {resizePreview.error ?? `${resizePreview.saving ? '保存中' : '跨度预览'}：${resizePreview.date} · ${resizePreview.entries.filter(entry => entry.taskId === resizePreview.taskId).length} 个上课日`}
+      {resizePreview.error ?? `${resizePreview.saving ? '保存中' : resizePreview.mode === 'move' ? '移动预览 · 开始日' : '跨度预览 · 结束日'}：${resizePreview.date} · ${resizePreview.entries.filter(entry => entry.taskId === resizePreview.taskId).length} 个上课日`}
     </div>}
 
     <section className="section-panel calendar-section schedule-palette-section">
@@ -348,8 +365,8 @@ export function CalendarPage() {
           onKeyDown={event => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); event.currentTarget.click(); } }}
           onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; }} onDrop={event => void dropOnDate(event, date)}>
           <span className="day-number">{dateParts(date).day}</span><span className="day-kind">{statusLabels[status]}</span>{day.title && <strong>{day.title}</strong>}
-          <div className="day-schedule-items">{startingTask && <div data-task-id={startingTask.id} className={`calendar-task-bar ${startingTask.type} ${stretchingTaskId === startingTask.id ? 'stretching' : ''} ${resizePreview?.taskId === startingTask.id ? 'resize-preview' : ''} ${resizePreview ? 'timeline-preview' : ''}`} style={{ '--task-span': segmentSpan } as CSSProperties} onClick={event => event.stopPropagation()}>
-            <span className="task-title-drag" title="拖动整张卡片" draggable onDragStart={event => startDrag(event, startingTask, 'move')}>{startingTask.title}</span>
+          <div className="day-schedule-items">{startingTask && <div data-task-id={startingTask.id} className={`calendar-task-bar ${startingTask.type} ${stretchingTaskId === startingTask.id ? 'stretching' : ''} ${resizePreview?.taskId === startingTask.id ? 'resize-preview' : ''} ${resizePreview ? 'timeline-preview' : ''}`} style={{ '--task-span': segmentSpan } as CSSProperties} onClick={event => event.stopPropagation()} onPointerDown={event => { if (!(event.target as HTMLElement).closest('.resize-handle, button')) startPointerResize(event, startingTask, 'move'); }}>
+            <span className="task-title-drag" role="button" tabIndex={0} aria-label={`移动 ${startingTask.title}`} title="拖动中心移动整门课程；或点击后选择开始日期" draggable={false} onDragStart={event => event.preventDefault()} onClick={event => { event.stopPropagation(); setPlacingTaskId(startingTask.id); setStretchingTaskId(''); setNotice(`请选择“${startingTask.title}”的新开始日期，原有教学日数保持不变，按 Esc 取消。`); }} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); event.currentTarget.click(); } }}>{startingTask.title}</span>
             <span className="resize-handle" role="button" tabIndex={0} draggable={false} onDragStart={event => event.preventDefault()} onPointerDown={event => startPointerResize(event, startingTask)}
               onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); event.currentTarget.click(); } }}
               onClick={event => chooseStretchEnd(event, startingTask)} title="拖动或点击后选择结束日期" aria-label={`调整 ${startingTask.title} 的日期跨度`}>❙</span>

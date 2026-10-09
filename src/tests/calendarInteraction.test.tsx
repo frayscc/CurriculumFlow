@@ -170,20 +170,15 @@ it('cancels pointer resize on Escape', async () => {
   expect((await db.teachingTasks.get(a.id))?.scheduledEndDate).toBe('2026-09-01');
 });
 
-it('connects course drag to exact insertion and shifts the following course', async () => {
+it('connects course center pointer drag to moving and reflow', async () => {
   const { a, b } = await fixture();
-  const values = new Map<string, string>();
-  const transfer = { effectAllowed: 'none', dropEffect: 'none', setData: (key: string, value: string) => values.set(key, value), getData: (key: string) => values.get(key) ?? '' };
-  function dragEvent(type: string) {
-    const event = new Event(type, { bubbles: true, cancelable: true });
-    Object.defineProperty(event, 'dataTransfer', { value: transfer });
-    return event;
-  }
-  await act(async () => container.querySelector('.task-title-drag')!.dispatchEvent(dragEvent('dragstart')));
-  expect(transfer.effectAllowed).toBe('move');
-  await act(async () => day('3').dispatchEvent(dragEvent('dragover')));
-  expect(transfer.dropEffect).toBe('move');
-  await act(async () => day('3').dispatchEvent(dragEvent('drop')));
+  await act(async () => day('1').querySelector('.task-title-drag')!.dispatchEvent(pointer('pointerdown', 10, 10)));
+  await act(async () => day('3').dispatchEvent(pointer('pointermove', 50, 50)));
+  expect(day('3').querySelector('.calendar-task-bar')?.getAttribute('data-task-id')).toBe(a.id);
+  expect(day('1').querySelector('.calendar-task-bar')?.getAttribute('data-task-id')).toBe(b.id);
+  expect(container.querySelector('.resize-feedback')?.textContent).toContain('移动预览');
+  expect((await db.teachingTasks.get(a.id))?.scheduledStartDate).toBe('2026-09-01');
+  await act(async () => day('3').dispatchEvent(pointer('pointerup', 50, 50)));
   await vi.waitFor(async () => expect((await db.teachingTasks.get(a.id))?.scheduledEndDate).toBe('2026-09-03'));
   expect((await db.teachingTasks.get(b.id))?.scheduledStartDate).toBe('2026-09-01');
 });
@@ -194,6 +189,44 @@ it('supports clicking a handle and selecting an end date', async () => {
   expect(container.querySelector('.term-calendar.is-stretching')).not.toBeNull();
   await act(async () => (day('3') as HTMLElement).click());
   await vi.waitFor(async () => expect((await db.teachingTasks.get(a.id))?.scheduledEndDate).toBe('2026-09-03'));
+});
+
+it('moves a whole multi-day course from its middle without changing duration or grab offset', async () => {
+  const { a, b } = await fixture();
+  await act(async () => resizeTask(a.id, '2026-09-03'));
+  await vi.waitFor(() => expect(day('1').querySelector<HTMLElement>('.calendar-task-bar')!.style.getPropertyValue('--task-span')).toBe('3'));
+  Object.assign(day('2'), { getBoundingClientRect: () => ({ left: 100, right: 200, top: 0, bottom: 100, width: 100 }) });
+  Object.assign(day('3'), { getBoundingClientRect: () => ({ left: 200, right: 300, top: 0, bottom: 100, width: 100 }) });
+  const original = day('1').querySelector('.calendar-task-bar')!;
+  await act(async () => original.dispatchEvent(pointer('pointerdown', 150, 50)));
+  await act(async () => window.dispatchEvent(pointer('pointermove', 250, 50)));
+  expect(day('2').querySelector('.calendar-task-bar')?.getAttribute('data-task-id')).toBe(a.id);
+  expect(container.querySelector('.resize-feedback')?.textContent).toContain('2026-09-02 · 3 个上课日');
+  await act(async () => window.dispatchEvent(pointer('pointerup', 250, 50)));
+  await vi.waitFor(async () => expect((await db.teachingTasks.get(a.id))?.scheduledDates).toEqual(['2026-09-02', '2026-09-03', '2026-09-04']));
+  expect((await db.teachingTasks.get(b.id))?.scheduledStartDate).toBe('2026-09-01');
+});
+
+it('cancels center dragging and rejects holidays without changing the course', async () => {
+  const { a } = await fixture();
+  const center = () => day('1').querySelector('.task-title-drag')!;
+  await act(async () => center().dispatchEvent(pointer('pointerdown', 10, 10)));
+  await act(async () => day('3').dispatchEvent(pointer('pointermove', 50, 50)));
+  await act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+  await act(async () => day('3').dispatchEvent(pointer('pointerup', 50, 50)));
+  expect((await db.teachingTasks.get(a.id))?.scheduledStartDate).toBe('2026-09-01');
+  await act(async () => center().dispatchEvent(pointer('pointerdown', 10, 10)));
+  await act(async () => day('5').dispatchEvent(pointer('pointermove', 50, 50)));
+  expect(container.querySelector('.resize-feedback.invalid')?.textContent).toContain('不能安排');
+  await act(async () => day('5').dispatchEvent(pointer('pointerup', 50, 50)));
+  expect((await db.teachingTasks.get(a.id))?.scheduledStartDate).toBe('2026-09-01');
+});
+
+it('supports clicking the course center and choosing a new start date', async () => {
+  const { a } = await fixture();
+  await act(async () => (day('1').querySelector('.task-title-drag') as HTMLElement).click());
+  await act(async () => (day('3') as HTMLElement).click());
+  await vi.waitFor(async () => expect((await db.teachingTasks.get(a.id))?.scheduledStartDate).toBe('2026-09-03'));
 });
 
 it('resizes across months by choosing an end date in the next month', async () => {

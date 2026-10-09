@@ -9,6 +9,15 @@
   cursor: ew-resize;
 }
 
+.term-calendar .calendar-task-bar {
+  touch-action: none;
+  user-select: none;
+  cursor: grab;
+}
+.term-calendar.is-dragging { cursor: grabbing; }
+.term-calendar .task-title-drag { cursor: grab; }
+.term-calendar.is-stretching .task-title-drag { pointer-events: auto; }
+
 /* Date selection must not disable the control needed to resume resizing. */
 .term-calendar.is-stretching .calendar-task-bar .resize-handle {
   pointer-events: auto;
