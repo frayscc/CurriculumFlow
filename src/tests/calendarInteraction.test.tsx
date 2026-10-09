@@ -53,6 +53,44 @@ it('resizes with pointer movement across a weekend and shifts later content', as
   expect((await db.teachingTasks.get(b.id))?.scheduledStartDate).toBe('2026-09-08');
 });
 
+it('keeps resizing enabled after clicking the handle and captures the pointer', async () => {
+  const { a } = await fixture();
+  const handle = container.querySelector('[aria-label="调整 课程A 的日期跨度"]') as HTMLElement;
+  const capture = vi.fn();
+  Object.assign(handle, { setPointerCapture: capture });
+  await act(async () => handle.click());
+  expect(container.querySelector('.is-stretching')).not.toBeNull();
+  const down = pointer('pointerdown', 10, 10);
+  await act(async () => handle.dispatchEvent(down));
+  expect(down.defaultPrevented).toBe(true);
+  expect(capture).toHaveBeenCalledWith(1);
+  expect(container.querySelector('.is-stretching')).toBeNull();
+  await act(async () => day('2').dispatchEvent(pointer('pointermove', 50, 50)));
+  await act(async () => day('2').dispatchEvent(pointer('pointerup', 50, 50)));
+  await vi.waitFor(async () => expect((await db.teachingTasks.get(a.id))?.scheduledEndDate).toBe('2026-09-02'));
+});
+
+it('uses cell geometry when capture or a spanning bar retargets events to the old handle', async () => {
+  const { a, b } = await fixture();
+  const handle = container.querySelector('[aria-label="调整 课程A 的日期跨度"]')!;
+  Object.assign(day('1'), { getBoundingClientRect: () => ({ left: 0, right: 100, top: 0, bottom: 100, width: 100 }) });
+  Object.assign(day('2'), { getBoundingClientRect: () => ({ left: 100, right: 200, top: 0, bottom: 100, width: 100 }) });
+  await act(async () => handle.dispatchEvent(pointer('pointerdown', 10, 10)));
+  await act(async () => handle.dispatchEvent(pointer('pointermove', 150, 50)));
+  await act(async () => handle.dispatchEvent(pointer('pointerup', 150, 50)));
+  await vi.waitFor(async () => expect((await db.teachingTasks.get(a.id))?.scheduledEndDate).toBe('2026-09-02'));
+  expect((await db.teachingTasks.get(b.id))?.scheduledStartDate).toBe('2026-09-03');
+});
+
+it('blocks native drag ghosts on the resize control', async () => {
+  await fixture();
+  const handle = container.querySelector('[aria-label="调整 课程A 的日期跨度"]') as HTMLElement;
+  expect(handle.draggable).toBe(false);
+  const event = new Event('dragstart', { bubbles: true, cancelable: true });
+  await act(async () => handle.dispatchEvent(event));
+  expect(event.defaultPrevented).toBe(true);
+});
+
 it('rejects pointer resize onto a weekend without changing either course', async () => {
   const { a, b } = await fixture();
   await act(async () => container.querySelector('[aria-label="调整 课程A 的日期跨度"]')!.dispatchEvent(pointer('pointerdown', 10, 10)));

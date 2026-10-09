@@ -78,7 +78,8 @@ export function CalendarPage() {
   const [placingTaskId, setPlacingTaskId] = useState('');
   const [draggingTask, setDraggingTask] = useState(false);
   const upgrading = useRef(false);
-  const pointerResize = useRef<{ taskId: string; pointerId: number; x: number; y: number; moved: boolean; date?: string } | null>(null);
+  const pointerResize = useRef<{ taskId: string; pointerId: number; x: number; y: number; moved: boolean; element: HTMLElement } | null>(null);
+  const calendarGrid = useRef<HTMLDivElement>(null);
   const suppressPointerClick = useRef(false);
 
   const activeMonth = month || project?.startDate.slice(0, 7) || '';
@@ -131,6 +132,14 @@ export function CalendarPage() {
 
   useEffect(() => {
     function targetDate(event: globalThis.PointerEvent) {
+      // A wide bar belongs to its first day in the DOM. Hit-test the date cells,
+      // not the bar, so pointer capture and overlapping segments cannot lie.
+      const cells = [...(calendarGrid.current?.querySelectorAll<HTMLElement>('[data-calendar-date]') ?? [])];
+      for (const cell of cells) {
+        const bounds = cell.getBoundingClientRect();
+        if (event.clientX >= bounds.left && event.clientX < bounds.right && event.clientY >= bounds.top && event.clientY < bounds.bottom) return cell.dataset.calendarDate;
+      }
+      if (cells.some(cell => cell.getBoundingClientRect().width > 0)) return undefined;
       const target = document.elementFromPoint?.(event.clientX, event.clientY) ?? event.target;
       return target instanceof Element ? target.closest<HTMLElement>('[data-calendar-date]')?.dataset.calendarDate : undefined;
     }
@@ -139,7 +148,6 @@ export function CalendarPage() {
       if (!current || event.pointerId !== current.pointerId) return;
       if (!current.moved && Math.hypot(event.clientX - current.x, event.clientY - current.y) < 5) return;
       current.moved = true;
-      current.date = targetDate(event);
       setDraggingTask(true);
       if (event.cancelable) event.preventDefault();
     }
@@ -147,6 +155,7 @@ export function CalendarPage() {
       const current = pointerResize.current;
       if (!current || event.pointerId !== current.pointerId) return;
       pointerResize.current = null;
+      if (current.element.hasPointerCapture?.(current.pointerId)) current.element.releasePointerCapture(current.pointerId);
       setDraggingTask(false);
       if (!current.moved) return;
       suppressPointerClick.current = true;
@@ -156,24 +165,32 @@ export function CalendarPage() {
         setStretchingTaskId(''); setError(''); setNotice(`结束日期已调整为 ${date}，后续安排已重排。`);
       }).catch(caught => setError(caught instanceof Error ? caught.message : '跨度调整失败。'));
     }
-    function cancel() { pointerResize.current = null; setDraggingTask(false); }
-    window.addEventListener('pointermove', move, { passive: false });
-    window.addEventListener('pointerup', finish);
+    function cancel() {
+      const current = pointerResize.current;
+      pointerResize.current = null;
+      if (current?.element.hasPointerCapture?.(current.pointerId)) current.element.releasePointerCapture(current.pointerId);
+      setDraggingTask(false);
+    }
+    window.addEventListener('pointermove', move, { passive: false, capture: true });
+    window.addEventListener('pointerup', finish, true);
     window.addEventListener('pointercancel', cancel);
     window.addEventListener('blur', cancel);
     return () => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', finish);
+      window.removeEventListener('pointermove', move, true);
+      window.removeEventListener('pointerup', finish, true);
       window.removeEventListener('pointercancel', cancel);
       window.removeEventListener('blur', cancel);
     };
   }, []);
 
-  function startPointerResize(event: PointerEvent, task: TeachingTask) {
+  function startPointerResize(event: PointerEvent<HTMLElement>, task: TeachingTask) {
     if (event.button !== 0) return;
+    event.preventDefault();
     event.stopPropagation();
+    event.currentTarget.setPointerCapture?.(event.pointerId);
     suppressPointerClick.current = false;
-    pointerResize.current = { taskId: task.id, pointerId: event.pointerId, x: event.clientX, y: event.clientY, moved: false };
+    pointerResize.current = { taskId: task.id, pointerId: event.pointerId, x: event.clientX, y: event.clientY, moved: false, element: event.currentTarget };
+    setStretchingTaskId('');
     setPlacingTaskId('');
   }
 
@@ -281,7 +298,7 @@ export function CalendarPage() {
     <section className="section-panel calendar-section visual-calendar-section">
       <div className="calendar-toolbar"><div><h2>学期月历</h2><p>点击日期后按快捷键；按住 Shift 再点另一个日期可选择连续范围。</p></div><div className="month-switcher"><button type="button" aria-label="上个月" disabled={months.indexOf(activeMonth) <= 0} onClick={() => moveMonth(-1)}>←</button><select aria-label="选择月份" value={activeMonth} onChange={event => { setMonth(event.target.value); setSelectedDate(''); setRangeStart(''); setRangeEnd(''); }}>{months.map(value => <option key={value} value={value}>{value.replace('-', ' 年 ')} 月</option>)}</select><button type="button" aria-label="下个月" disabled={months.indexOf(activeMonth) >= months.length - 1} onClick={() => moveMonth(1)}>→</button></div></div>
       <div className="calendar-quickbar"><div className="calendar-legend"><span><i className="legend-dot teaching" />上课</span><span><i className="legend-dot holiday" />放假</span><span><i className="legend-dot exam" />考试</span></div><div className="calendar-shortcuts"><button type="button" onClick={() => void applyStatus('teaching')}><kbd>1</kbd> 上课</button><button type="button" onClick={() => void applyStatus('holiday')}><kbd>2</kbd> 放假</button><button type="button" onClick={() => void applyStatus('exam')}><kbd>3</kbd> 考试</button><button type="button" onClick={() => void applyStatus('default')}><kbd>0</kbd> 恢复默认</button></div></div>
-      <div className={`term-calendar ${draggingTask ? 'is-dragging' : ''} ${stretchingTaskId || placingTaskId ? 'is-stretching' : ''}`}><div className="term-weekdays">{calendarWeekdays.map(day => <span key={day}>{weekdayNames[day - 1]}</span>)}</div><div className="term-calendar-grid">{calendarCells.map((date, index) => {
+      <div className={`term-calendar ${draggingTask ? 'is-dragging' : ''} ${stretchingTaskId || placingTaskId ? 'is-stretching' : ''}`}><div className="term-weekdays">{calendarWeekdays.map(day => <span key={day}>{weekdayNames[day - 1]}</span>)}</div><div className="term-calendar-grid" ref={calendarGrid}>{calendarCells.map((date, index) => {
         if (!date) return <span className="term-day blank" key={`blank-${index}`} />;
         const day = dayByDate.get(date);
         if (!day) return <span className="term-day outside" key={date}><span>{dateParts(date).day}</span></span>;
@@ -305,7 +322,7 @@ export function CalendarPage() {
           <span className="day-number">{dateParts(date).day}</span><span className="day-kind">{statusLabels[status]}</span>{day.title && <strong>{day.title}</strong>}
           <div className="day-schedule-items">{startingTask && <div className={`calendar-task-bar ${startingTask.type} ${stretchingTaskId === startingTask.id ? 'stretching' : ''}`} style={{ '--task-span': segmentSpan } as CSSProperties} onClick={event => event.stopPropagation()}>
             <span className="task-title-drag" title="拖动整张卡片" draggable onDragStart={event => startDrag(event, startingTask, 'move')}>{startingTask.title}</span>
-            <span className="resize-handle" role="button" tabIndex={0} onPointerDown={event => startPointerResize(event, startingTask)}
+            <span className="resize-handle" role="button" tabIndex={0} draggable={false} onDragStart={event => event.preventDefault()} onPointerDown={event => startPointerResize(event, startingTask)}
               onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); event.currentTarget.click(); } }}
               onClick={event => chooseStretchEnd(event, startingTask)} title="拖动或点击后选择结束日期" aria-label={`调整 ${startingTask.title} 的日期跨度`}>❙</span>
             <button type="button" onClick={() => void removePlacement(startingTask.id)} title="移回待安排区" aria-label={`取消安排 ${startingTask.title}`}>×</button>
