@@ -1,0 +1,12 @@
+.account-login { max-width: 540px; margin: 8vh auto; }
+.account-login form, .account-page form { display: grid; gap: 16px; }
+.account-login label, .account-page label { display: grid; gap: 6px; }
+.account-login input, .account-page input, .account-page select { padding: 10px; border: 1px solid #c8d1d4; border-radius: 8px; min-width: 0; }
+.membership-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; }
+.account-page .checkbox-label { display: flex; align-items: center; }
+.readonly-banner { padding: 12px 16px; background: #e9f0f3; border-radius: 10px; margin-bottom: 16px; }
+.library-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.read-only-resources .page-heading > .button,
+.read-only-resources .header-actions,
+.read-only-resources .upload-button,
+.read-only-resources .file-slot .text-button { display: none; }

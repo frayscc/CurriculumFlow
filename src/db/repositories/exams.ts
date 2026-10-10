@@ -2,6 +2,11 @@ import type { Exam, ExamFile, ExamFileType, ExamType, SemesterProject, Teacher }
 import { validateExamFileType } from '../../core/naming';
 import { parseLocalDate } from '../../core/calendar/dates';
 import { db as appDb } from '../schema';
+import { canEditProject } from '../../auth';
+
+async function requireResourceEditor(projectId: string, database: typeof appDb) {
+  if (!canEditProject(await database.projects.get(projectId), true)) throw new Error('只有本备课组长或管理员可修改试卷资源。');
+}
 
 export interface ExamInput {
   title: string; examType: ExamType; examDate?: string; authorNames: string[]; reviewerNames: string[]; note?: string;
@@ -19,7 +24,8 @@ function validate(input: ExamInput): ExamInput {
 async function resolveTeachers(names: string[], database: typeof appDb): Promise<Teacher[]> {
   const result: Teacher[] = [];
   for (const name of names) {
-    let teacher = await database.teachers.where('name').equals(name).first();
+    const matches = await database.teachers.where('name').equals(name).toArray();
+    let teacher = matches.find(person => person.userId) ?? matches[0];
     if (!teacher) { teacher = { id: crypto.randomUUID(), name }; await database.teachers.add(teacher); }
     result.push(teacher);
   }
@@ -27,6 +33,7 @@ async function resolveTeachers(names: string[], database: typeof appDb): Promise
 }
 
 export async function createExam(projectId: string, input: ExamInput, database = appDb): Promise<Exam> {
+  await requireResourceEditor(projectId, database);
   const clean = validate(input);
   return database.transaction('rw', database.projects, database.exams, database.teachers, async () => {
     const project = await database.projects.get(projectId);
@@ -47,6 +54,8 @@ export async function createExam(projectId: string, input: ExamInput, database =
 }
 
 export async function updateExam(examId: string, input: ExamInput, database = appDb): Promise<Exam> {
+  const target = await database.exams.get(examId);
+  if (target) await requireResourceEditor(target.projectId, database);
   const clean = validate(input);
   return database.transaction('rw', database.exams, database.teachers, async () => {
     const old = await database.exams.get(examId);
@@ -65,6 +74,8 @@ export async function updateExam(examId: string, input: ExamInput, database = ap
 }
 
 export async function uploadExamFile(examId: string, fileType: ExamFileType, file: Blob, filename: string, database = appDb): Promise<ExamFile> {
+  const target = await database.exams.get(examId);
+  if (target) await requireResourceEditor(target.projectId, database);
   validateExamFileType(fileType, filename);
   if (file.size === 0) throw new Error('不能上传空文件。');
   return database.transaction('rw', database.exams, database.examFiles, database.fileBlobs, async () => {
@@ -85,6 +96,8 @@ export async function uploadExamFile(examId: string, fileType: ExamFileType, fil
 }
 
 export async function deleteExamFile(fileId: string, database = appDb): Promise<void> {
+  const target = await database.examFiles.get(fileId);
+  if (target) await requireResourceEditor(target.projectId, database);
   await database.transaction('rw', database.examFiles, database.fileBlobs, async () => {
     const file = await database.examFiles.get(fileId);
     if (!file) return;
@@ -94,6 +107,8 @@ export async function deleteExamFile(fileId: string, database = appDb): Promise<
 }
 
 export async function deleteExam(examId: string, database = appDb): Promise<void> {
+  const target = await database.exams.get(examId);
+  if (target) await requireResourceEditor(target.projectId, database);
   await database.transaction('rw', database.exams, database.examFiles, database.fileBlobs, database.teachingTasks, async () => {
     const exam = await database.exams.get(examId);
     if (!exam) return;

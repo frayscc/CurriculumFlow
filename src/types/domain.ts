@@ -9,6 +9,7 @@ export type ExamType = 'quiz' | 'chapter_test' | 'monthly_exam' | 'midterm' | 'f
 export type ExamFileType = 'paper_word' | 'paper_pdf' | 'answer_sheet_word' | 'answer_sheet_pdf' | 'answer_word' | 'answer_pdf' | 'specification_xlsx';
 
 export interface SemesterProject {
+  ownerId?: ID; groupId?: ID; archived?: boolean;
   id: ID; schoolYear: string; grade: string; subject: string; semester: string;
   startDate: LocalDate; endDate: LocalDate; sourceProjectId?: ID; weekStart?: Weekday;
   sharedCourseSlots?: SharedCourseSlot[]; weeklyProgressSlots?: WeeklyProgressSlot[];
@@ -71,7 +72,7 @@ export interface Exam {
   authorNames: string[]; reviewerNames: string[]; note?: string;
   createdAt: Timestamp; updatedAt: Timestamp;
 }
-export interface Teacher { id: ID; name: string; }
+export interface Teacher { id: ID; name: string; userId?: ID; disabled?: boolean; }
 export interface ExamFile {
   id: ID; projectId: ID; examId: ID; fileType: ExamFileType;
   originalFileName: string; mimeType: string; size: number; blobId: ID; uploadedAt: Timestamp;

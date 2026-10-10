@@ -9,6 +9,7 @@ import { manualScheduleReason, moveTask, normalizeManualTimeline, previewTaskMov
 import { db } from '../db/schema';
 import type { CalendarDay, TaskType, TeachingTask, Weekday } from '../types/domain';
 import '../calendarDrag.css';
+import { canEditProject } from '../auth';
 
 const weekdayNames = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
 const statusLabels: Record<CalendarStatus, string> = { teaching: '上课', holiday: '放假', exam: '考试' };
@@ -69,6 +70,7 @@ const taskTypeLabels: Record<TaskType, string> = { new_lesson: '新课', exercis
 export function CalendarPage() {
   const { projectId = '' } = useParams();
   const project = useLiveQuery(() => db.projects.get(projectId), [projectId]);
+  const readonly = !canEditProject(project);
   const days = useLiveQuery(() => db.calendarDays.where('projectId').equals(projectId).sortBy('date'), [projectId]);
   const tasks = useLiveQuery(() => db.teachingTasks.where('projectId').equals(projectId).sortBy('order'), [projectId]);
   const scheduledLessons = useLiveQuery(async () => {
@@ -116,6 +118,7 @@ export function CalendarPage() {
   const selectedDay = selectedDate ? dayByDate.get(selectedDate) : undefined;
 
   async function applyStatus(status: CalendarStatus | 'default') {
+    if (readonly) return;
     const start = rangeStart || selectedDate; const end = rangeEnd || start;
     if (!start || !end) return;
     try {
@@ -126,6 +129,7 @@ export function CalendarPage() {
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
+      if (readonly) return;
       if (event.key === 'Escape') {
         const current = pointerResize.current;
         if (current?.element.hasPointerCapture?.(current.pointerId)) current.element.releasePointerCapture(current.pointerId);
@@ -221,6 +225,7 @@ export function CalendarPage() {
   }, []);
 
   function startPointerResize(event: PointerEvent<HTMLElement>, task: TeachingTask, mode: 'move' | 'resize' = 'resize') {
+    if (readonly) return;
     if (event.button !== 0 || resizePreview?.saving) return;
     event.preventDefault();
     event.stopPropagation();
@@ -237,14 +242,14 @@ export function CalendarPage() {
   }
 
   useEffect(() => {
-    if (!tasks || !scheduledLessons) return;
+    if (readonly || !tasks || !scheduledLessons) return;
     const dates = scheduledLessons.map(lesson => lesson.date);
     const needsUpgrade = tasks.some(task => task.scheduledStartDate && !task.scheduledDates) || new Set(dates).size !== dates.length;
     if (needsUpgrade && !upgrading.current) {
       upgrading.current = true;
       void normalizeManualTimeline(projectId).catch(caught => setError(caught instanceof Error ? caught.message : '旧版教学安排迁移失败。')).finally(() => { upgrading.current = false; });
     }
-  }, [projectId, scheduledLessons, tasks]);
+  }, [projectId, scheduledLessons, tasks, readonly]);
 
   function selectCalendarDate(date: string, event: MouseEvent) {
     if (!dayByDate.has(date)) return;
@@ -262,11 +267,13 @@ export function CalendarPage() {
 
   async function addContent(event: FormEvent) {
     event.preventDefault();
+    if (readonly) return;
     try { await createTask(projectId, { title: newTitle, type: newType }); setNewTitle(''); setError(''); setNotice('教学内容已添加，请拖到月历中。'); }
     catch (caught) { setError(caught instanceof Error ? caught.message : '教学内容添加失败。'); }
   }
 
   function startDrag(event: DragEvent, task: TeachingTask, mode: 'move' | 'resize') {
+    if (readonly) { event.preventDefault(); return; }
     event.stopPropagation();
     setDraggingTask(true);
     setStretchingTaskId('');
@@ -277,6 +284,7 @@ export function CalendarPage() {
 
   async function dropOnDate(event: DragEvent, date: string) {
     event.preventDefault(); event.stopPropagation();
+    if (readonly) return;
     try {
       const raw = event.dataTransfer.getData('application/x-curriculumflow-task');
       if (!raw) return;
@@ -295,11 +303,13 @@ export function CalendarPage() {
   }
 
   async function removePlacement(taskId: string) {
+    if (readonly) return;
     try { await unplaceTask(taskId); setError(''); setNotice('已移回待安排区。'); }
     catch (caught) { setError(caught instanceof Error ? caught.message : '取消安排失败。'); }
   }
 
   async function clickCalendarDate(date: string, event: MouseEvent) {
+    if (readonly) return selectCalendarDate(date, event);
     if (placingTaskId) {
       try {
         await moveTask(placingTaskId, date);
@@ -317,6 +327,7 @@ export function CalendarPage() {
   }
 
   function chooseStretchEnd(event: MouseEvent, task: TeachingTask) {
+    if (readonly) return;
     event.stopPropagation(); setStretchingTaskId(task.id); setError('');
     setPlacingTaskId('');
     setNotice(`正在调整“${task.title}”：请拖动手柄到结束日期，或直接点击结束日期。`);
@@ -334,15 +345,16 @@ export function CalendarPage() {
       {resizePreview.error ?? `${resizePreview.saving ? '保存中' : resizePreview.mode === 'move' ? '移动预览 · 开始日' : '跨度预览 · 结束日'}：${resizePreview.date} · ${resizePreview.entries.filter(entry => entry.taskId === resizePreview.taskId).length} 个上课日`}
     </div>}
 
-    <section className="section-panel calendar-section schedule-palette-section">
+    {readonly && <p className="readonly-banner">组内共享 · 只读月历，可切换月份和查看日期；仅创建者和备课组长可修改。</p>}
+    {!readonly && <section className="section-panel calendar-section schedule-palette-section">
       <div className="section-heading"><div><h2>待安排教学内容</h2><p>拖到某一天即从当天插入；该日及之后的内容顺延，之前的安排保留。</p></div><Link to={`/projects/${projectId}/tasks`}>管理全部内容 →</Link></div>
       <form className="quick-task-form" onSubmit={event => void addContent(event)}><input value={newTitle} onChange={event => setNewTitle(event.target.value)} placeholder="输入教学内容" required /><select value={newType} onChange={event => setNewType(event.target.value as TaskType)}>{Object.entries(taskTypeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><button className="button secondary" type="submit">新增</button></form>
       <div className="schedule-palette">{tasks.filter(task => !task.scheduledStartDate).map(task => <div role="button" tabIndex={0} aria-pressed={placingTaskId === task.id} className={`schedule-chip ${task.type}`} draggable onDragStart={event => startDrag(event, task, 'move')} onClick={() => { setPlacingTaskId(task.id); setStretchingTaskId(''); setNotice(`请选择“${task.title}”的插入日期，按 Esc 取消。`); }} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.currentTarget.click(); } }} key={task.id}><span>{task.title}</span><small>{taskTypeLabels[task.type]} · 拖入或点击后选日期</small></div>)}{tasks.length > 0 && tasks.every(task => task.scheduledStartDate) && <p className="muted">所有教学内容都已安排。</p>}{tasks.length === 0 && <p className="muted">请先新增一项教学内容。</p>}</div>
-    </section>
+    </section>}
 
     <section className="section-panel calendar-section visual-calendar-section">
       <div className="calendar-toolbar"><div><h2>学期月历</h2><p>点击日期后按快捷键；按住 Shift 再点另一个日期可选择连续范围。</p></div><div className="month-switcher"><button type="button" aria-label="上个月" disabled={months.indexOf(activeMonth) <= 0} onClick={() => moveMonth(-1)}>←</button><select aria-label="选择月份" value={activeMonth} onChange={event => { setMonth(event.target.value); setSelectedDate(''); setRangeStart(''); setRangeEnd(''); }}>{months.map(value => <option key={value} value={value}>{value.replace('-', ' 年 ')} 月</option>)}</select><button type="button" aria-label="下个月" disabled={months.indexOf(activeMonth) >= months.length - 1} onClick={() => moveMonth(1)}>→</button></div></div>
-      <div className="calendar-quickbar"><div className="calendar-legend"><span><i className="legend-dot teaching" />上课</span><span><i className="legend-dot holiday" />放假</span><span><i className="legend-dot exam" />考试</span></div><div className="calendar-shortcuts"><button type="button" onClick={() => void applyStatus('teaching')}><kbd>1</kbd> 上课</button><button type="button" onClick={() => void applyStatus('holiday')}><kbd>2</kbd> 放假</button><button type="button" onClick={() => void applyStatus('exam')}><kbd>3</kbd> 考试</button><button type="button" onClick={() => void applyStatus('default')}><kbd>0</kbd> 恢复默认</button></div></div>
+      <div className="calendar-quickbar"><div className="calendar-legend"><span><i className="legend-dot teaching" />上课</span><span><i className="legend-dot holiday" />放假</span><span><i className="legend-dot exam" />考试</span></div>{!readonly && <div className="calendar-shortcuts"><button type="button" onClick={() => void applyStatus('teaching')}><kbd>1</kbd> 上课</button><button type="button" onClick={() => void applyStatus('holiday')}><kbd>2</kbd> 放假</button><button type="button" onClick={() => void applyStatus('exam')}><kbd>3</kbd> 考试</button><button type="button" onClick={() => void applyStatus('default')}><kbd>0</kbd> 恢复默认</button></div>}</div>
       <div className={`term-calendar ${draggingTask ? 'is-dragging' : ''} ${stretchingTaskId || placingTaskId ? 'is-stretching' : ''}`}><div className="term-weekdays">{calendarWeekdays.map(day => <span key={day}>{weekdayNames[day - 1]}</span>)}</div><div className="term-calendar-grid" ref={calendarGrid}>{calendarCells.map((date, index) => {
         if (!date) return <span className="term-day blank" key={`blank-${index}`} />;
         const day = dayByDate.get(date);
@@ -366,18 +378,18 @@ export function CalendarPage() {
           onDragOver={event => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; }} onDrop={event => void dropOnDate(event, date)}>
           <span className="day-number">{dateParts(date).day}</span><span className="day-kind">{statusLabels[status]}</span>{day.title && <strong>{day.title}</strong>}
           <div className="day-schedule-items">{startingTask && <div data-task-id={startingTask.id} className={`calendar-task-bar ${startingTask.type} ${stretchingTaskId === startingTask.id ? 'stretching' : ''} ${resizePreview?.taskId === startingTask.id ? 'resize-preview' : ''} ${resizePreview ? 'timeline-preview' : ''}`} style={{ '--task-span': segmentSpan } as CSSProperties} onClick={event => event.stopPropagation()} onPointerDown={event => { if (!(event.target as HTMLElement).closest('.resize-handle, button')) startPointerResize(event, startingTask, 'move'); }}>
-            <span className="task-title-drag" role="button" tabIndex={0} aria-label={`移动 ${startingTask.title}`} title="拖动中心移动整门课程；或点击后选择开始日期" draggable={false} onDragStart={event => event.preventDefault()} onClick={event => { event.stopPropagation(); setPlacingTaskId(startingTask.id); setStretchingTaskId(''); setNotice(`请选择“${startingTask.title}”的新开始日期，原有教学日数保持不变，按 Esc 取消。`); }} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); event.currentTarget.click(); } }}>{startingTask.title}</span>
-            <span className="resize-handle" role="button" tabIndex={0} draggable={false} onDragStart={event => event.preventDefault()} onPointerDown={event => startPointerResize(event, startingTask)}
+            <span className="task-title-drag" role={readonly ? undefined : 'button'} tabIndex={readonly ? undefined : 0} aria-label={readonly ? startingTask.title : `移动 ${startingTask.title}`} title={readonly ? startingTask.title : '拖动中心移动整门课程；或点击后选择开始日期'} draggable={false} onDragStart={event => event.preventDefault()} onClick={event => { event.stopPropagation(); if (readonly) return; setPlacingTaskId(startingTask.id); setStretchingTaskId(''); setNotice(`请选择“${startingTask.title}”的新开始日期，原有教学日数保持不变，按 Esc 取消。`); }} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); event.currentTarget.click(); } }}>{startingTask.title}</span>
+            {!readonly && <><span className="resize-handle" role="button" tabIndex={0} draggable={false} onDragStart={event => event.preventDefault()} onPointerDown={event => startPointerResize(event, startingTask)}
               onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); event.currentTarget.click(); } }}
               onClick={event => chooseStretchEnd(event, startingTask)} title="拖动或点击后选择结束日期" aria-label={`调整 ${startingTask.title} 的日期跨度`}>❙</span>
-            <button type="button" onClick={() => void removePlacement(startingTask.id)} title="移回待安排区" aria-label={`取消安排 ${startingTask.title}`}>×</button>
+            <button type="button" onClick={() => void removePlacement(startingTask.id)} title="移回待安排区" aria-label={`取消安排 ${startingTask.title}`}>×</button></>}
           </div>}</div>
           {day.dayType === 'makeup_workday' && <small>执行{weekdayNames[effectiveWeekday - 1]}安排</small>}
           {!day.title && status === 'holiday' && <small>{day.weekday >= 6 && day.dayType === 'normal' ? '周末' : '已设为放假'}</small>}
         </div>;
       })}</div></div>
-      <div className="calendar-selection-summary"><span>{rangeStart ? `已选择：${rangeStart}${rangeEnd && rangeEnd !== rangeStart ? ` 至 ${rangeEnd}` : ''}` : '尚未选择日期'}</span><label>周末设为上课时执行<select value={makeupWeekday} onChange={event => setMakeupWeekday(Number(event.target.value) as Weekday)}>{weekdayNames.slice(0, 5).map((label, index) => <option key={label} value={index + 1}>{label}</option>)}</select></label></div>
-      {selectedDay ? <DayEditor key={`${selectedDay.date}-${selectedDay.dayType}-${selectedDay.scheduleWeekday ?? ''}-${selectedDay.title ?? ''}`} day={selectedDay} onError={setError} /> : <aside className="day-editor empty-day-editor"><strong>选择一个日期</strong><p>点击月历日期后，可使用数字键快速设置状态。</p></aside>}
+      {readonly ? <aside className="day-editor"><strong>{selectedDay?.date ?? '请选择日期查看'}</strong><p>{selectedDay ? `${statusLabels[calendarStatus(selectedDay)]} · ${selectedDay.title ?? ''} ${selectedDay.note ?? ''}` : '只读模式不修改教学安排。'}</p></aside> : <><div className="calendar-selection-summary"><span>{rangeStart ? `已选择：${rangeStart}${rangeEnd && rangeEnd !== rangeStart ? ` 至 ${rangeEnd}` : ''}` : '尚未选择日期'}</span><label>周末设为上课时执行<select value={makeupWeekday} onChange={event => setMakeupWeekday(Number(event.target.value) as Weekday)}>{weekdayNames.slice(0, 5).map((label, index) => <option key={label} value={index + 1}>{label}</option>)}</select></label></div>
+      {selectedDay ? <DayEditor key={`${selectedDay.date}-${selectedDay.dayType}-${selectedDay.scheduleWeekday ?? ''}-${selectedDay.title ?? ''}`} day={selectedDay} onError={setError} /> : <aside className="day-editor empty-day-editor"><strong>选择一个日期</strong><p>点击月历日期后，可使用数字键快速设置状态。</p></aside>}</>}
     </section>
   </main>;
 }

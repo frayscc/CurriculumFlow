@@ -6,8 +6,10 @@ import { exportProjectBackup, prepareProjectBackup, restoreProjectBackup, type P
 import { db } from '../db/schema';
 import type { ExamFile } from '../types/domain';
 import { downloadLocalRecovery } from '../db/serverSync';
+import { getAuth } from '../auth';
 
 export function BackupPage() {
+  const canRestore = !getAuth() || getAuth()?.user?.role === 'admin';
   const { projectId } = useParams();
   const navigate = useNavigate();
   const project = useLiveQuery(async () => projectId ? await db.projects.get(projectId) : undefined, [projectId]);
@@ -32,6 +34,7 @@ export function BackupPage() {
     finally { setBusy(false); }
   }
   async function selectBackup(file?: File) {
+    if (!canRestore) { setError('多人版仅管理员可恢复完整备份。'); return; }
     prepared.current = null; setSummary(null); setError('');
     if (!file) return;
     setBusy(true);
@@ -42,6 +45,7 @@ export function BackupPage() {
     finally { setBusy(false); }
   }
   async function restore() {
+    if (!canRestore) { setError('多人版仅管理员可恢复完整备份。'); return; }
     if (!prepared.current) return;
     setBusy(true); setError('');
     try { const restored = await restoreProjectBackup(prepared.current); prepared.current = null; navigate(`/projects/${restored.id}`); }

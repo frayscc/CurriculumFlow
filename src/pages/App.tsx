@@ -15,6 +15,11 @@ import { copyHistoricalProject, defaultCopyOptions, type CopyOptions } from '../
 import { readProjectDashboard } from '../db/repositories/dashboard';
 import { downloadLocalRecovery, getSyncStatus, readServerKeepingLocalCopy, SYNC_EVENT, type SyncStatus } from '../db/serverSync';
 import '../syncStatus.css';
+import { api, canEditProject, getAuth } from '../auth';
+import { AccountPage } from './AccountPage';
+import { ProjectAccess } from '../components/ProjectAccess';
+import { LibraryPage } from './LibraryPage';
+import { syncNow } from '../db/serverSync';
 
 function StorageStatus() {
   const [status, setStatus] = useState<SyncStatus>(getSyncStatus());
@@ -42,7 +47,7 @@ function projectTitle(project: SemesterProject) {
 }
 
 function Home() {
-  const projects = useLiveQuery(() => db.projects.orderBy('updatedAt').reverse().toArray());
+  const projects = useLiveQuery(() => db.projects.orderBy('updatedAt').reverse().filter(project => !project.archived).toArray());
   const [creating, setCreating] = useState(false);
   const [copying, setCopying] = useState(false);
   const [sourceProjectId, setSourceProjectId] = useState('');
@@ -51,7 +56,7 @@ function Home() {
   return (
     <main className="workspace">
       <div className="page-heading">
-        <div><p className="eyebrow">工作空间</p><h1>学期项目</h1><p className="muted">教学安排和试卷资源，保存在这台设备上。</p></div>
+        <div><p className="eyebrow">工作空间</p><h1>学期项目</h1><p className="muted">{getAuth() ? '显示你所在备课组的教学项目；试卷资源库面向全体老师共享。' : '教学安排和试卷资源，保存在这台设备上。'}</p>{getAuth() && <p>我的备课组：{getAuth()!.groups.map(group => `${group.schoolYear} ${group.grade}${group.subject}`).join('、') || '尚未分配，请联系管理员'}</p>}</div>
         <div className="header-actions">{projects && projects.length > 0 && <button className="button secondary" onClick={() => { setSourceProjectId(projects[0].id); setCopying(true); }}>基于往届创建</button>}<Link className="button secondary" to="/backup">从备份恢复</Link><button className="button primary" onClick={() => setCreating(true)}>＋ 新建项目</button></div>
       </div>
       {projects === undefined ? <p>正在读取本地项目…</p> : projects.length === 0 ? (
@@ -85,6 +90,7 @@ function ProjectPage() {
   const project = useLiveQuery(() => db.projects.get(projectId), [projectId]);
   const dayCount = useLiveQuery(() => db.calendarDays.where('projectId').equals(projectId).count(), [projectId]);
   const taskCount = useLiveQuery(() => db.teachingTasks.where('projectId').equals(projectId).count(), [projectId]);
+  const examCount = useLiveQuery(() => db.exams.where('projectId').equals(projectId).count(), [projectId]);
   const arrangedCount = useLiveQuery(() => db.teachingTasks.where('projectId').equals(projectId).filter(task => !!task.scheduledStartDate).count(), [projectId]);
   const now = new Date();
   const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
@@ -95,7 +101,7 @@ function ProjectPage() {
 
   async function remove() {
     if (!project) return;
-    if (!window.confirm(`删除“${projectTitle(project)}”？此操作会删除该项目的校历、任务、考试和附件，无法撤销。`)) return;
+    if (!window.confirm(`删除“${projectTitle(project)}”的教学项目？校历和教学任务将被删除；已入库试卷及附件会继续保留在年度试卷资源库中。`)) return;
     setError('');
     try { await deleteProject(project.id); navigate('/'); }
     catch (caught) { setError(caught instanceof Error ? caught.message : '删除失败，请重试。'); }
@@ -108,7 +114,7 @@ function ProjectPage() {
       <Link to="/" className="back-link">← 所有项目</Link>
       <div className="page-heading project-heading">
         <div><p className="eyebrow">学期项目</p><h1>{projectTitle(project)}</h1><p className="muted">{project.startDate} 至 {project.endDate}</p></div>
-        <div className="header-actions"><button className="button secondary" onClick={() => setEditing(true)}>编辑信息</button><button className="button danger" onClick={remove}>删除项目</button></div>
+        <div className="header-actions"><button disabled={!canEditProject(project)} className="button secondary" onClick={() => setEditing(true)}>编辑信息</button><button disabled={!canEditProject(project) || (!!examCount && !canEditProject(project, true))} className="button danger" onClick={remove}>删除项目</button></div>
       </div>
       {error && <p role="alert" className="error">{error}</p>}
       <section className="overview-grid">
@@ -132,5 +138,12 @@ function ProjectPage() {
 }
 
 export function App() {
-  return <div className="app-shell"><header className="app-header"><Link to="/" className="brand"><span className="brand-mark">C</span><span>CurriculumFlow</span></Link><span className="header-note"><Link to="/archive">试卷资源库</Link> · <StorageStatus /></span></header><Routes><Route path="/" element={<Home />} /><Route path="/archive" element={<ArchivePage />} /><Route path="/backup" element={<BackupPage />} /><Route path="/projects/:projectId" element={<ProjectPage />} /><Route path="/projects/:projectId/calendar" element={<CalendarPage />} /><Route path="/projects/:projectId/tasks" element={<TasksPage />} /><Route path="/projects/:projectId/exams" element={<ExamPage />} /><Route path="/projects/:projectId/exams/:examId" element={<ExamPage />} /><Route path="/projects/:projectId/export" element={<ExportPage />} /><Route path="/projects/:projectId/backup" element={<BackupPage />} /><Route path="*" element={<main className="workspace"><h1>页面不存在</h1><Link to="/">返回项目列表</Link></main>} /></Routes></div>;
+  const [logoutError, setLogoutError] = useState('');
+  async function logout() {
+    setLogoutError('');
+    try { await syncNow(); await api('/api/auth/logout', 'POST', {}); window.location.reload(); }
+    catch (caught) { setLogoutError(caught instanceof Error ? caught.message : '退出失败'); }
+  }
+  return <div className="app-shell"><header className="app-header"><Link to="/" className="brand"><span className="brand-mark">C</span><span>CurriculumFlow</span></Link><span className="header-note"><Link to="/archive">试卷资源库</Link> · <StorageStatus />{getAuth()?.user && <> · <Link to="/accounts">{getAuth()!.user!.name} / 账号</Link> <button type="button" onClick={() => void logout()}>退出</button></>}</span></header>{logoutError && <p role="alert" className="error">{logoutError}</p>}
+    <Routes><Route path="/" element={<Home />} /><Route path="/accounts" element={<AccountPage />} /><Route path="/archive" element={getAuth() ? <LibraryPage /> : <ArchivePage />} /><Route path="/backup" element={<BackupPage />} /><Route path="/projects/:projectId" element={<ProjectPage />} /><Route path="/projects/:projectId/calendar" element={<ProjectAccess><CalendarPage /></ProjectAccess>} /><Route path="/projects/:projectId/tasks" element={<ProjectAccess><TasksPage /></ProjectAccess>} /><Route path="/projects/:projectId/exams" element={<ExamPage />} /><Route path="/projects/:projectId/exams/:examId" element={<ExamPage />} /><Route path="/projects/:projectId/export" element={<ExportPage />} /><Route path="/projects/:projectId/backup" element={<BackupPage />} /><Route path="*" element={<main className="workspace"><h1>页面不存在</h1><Link to="/">返回项目列表</Link></main>} /></Routes></div>;
 }

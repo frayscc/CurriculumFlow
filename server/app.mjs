@@ -1,7 +1,8 @@
 import { createReadStream, existsSync, mkdirSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { extname, join, normalize, resolve } from 'node:path';
+import { extname, join, normalize, resolve, sep } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { createAccess } from './access.mjs';
 
 const MIME_TYPES = {
   '.css': 'text/css; charset=utf-8',
@@ -33,12 +34,7 @@ async function readBody(request, limit) {
   return Buffer.concat(chunks);
 }
 
-function validateSnapshot(value) {
-  if (!value || typeof value !== 'object' || value.schemaVersion !== 1 || !value.tables || typeof value.tables !== 'object') return false;
-  return Object.values(value.tables).every(Array.isArray);
-}
-
-export function createAppServer({ dataDir, staticDir, maxUploadBytes = 800 * 1024 * 1024 }) {
+export function createAppServer({ dataDir, staticDir, maxUploadBytes = 800 * 1024 * 1024, setupToken }) {
   mkdirSync(dataDir, { recursive: true });
   const database = new DatabaseSync(join(dataDir, 'curriculumflow.db'));
   database.exec(`
@@ -59,16 +55,11 @@ export function createAppServer({ dataDir, staticDir, maxUploadBytes = 800 * 102
     );
   `);
 
-  const getState = database.prepare('SELECT revision, payload, updated_at FROM app_state WHERE id = 1');
+  const access = createAccess(database, dataDir, setupToken);
   const getBlob = database.prepare('SELECT mime_type, size, data FROM file_blobs WHERE id = ?');
-  const getBlobMetadata = database.prepare('SELECT id, mime_type AS type, size FROM file_blobs ORDER BY id');
   const putBlob = database.prepare(`
     INSERT INTO file_blobs (id, mime_type, size, data, updated_at) VALUES (?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET mime_type = excluded.mime_type, size = excluded.size, data = excluded.data, updated_at = excluded.updated_at
-  `);
-  const putState = database.prepare(`
-    INSERT INTO app_state (id, revision, payload, updated_at) VALUES (1, ?, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET revision = excluded.revision, payload = excluded.payload, updated_at = excluded.updated_at
   `);
 
   function serveStatic(request, response, pathname) {
@@ -76,7 +67,7 @@ export function createAppServer({ dataDir, staticDir, maxUploadBytes = 800 * 102
     const decoded = decodeURIComponent(pathname);
     const safePath = normalize(decoded).replace(/^(\.\.[/\\])+/, '').replace(/^[/\\]+/, '');
     let filePath = resolve(staticDir, safePath || 'index.html');
-    if (!filePath.startsWith(resolve(staticDir))) return json(response, 403, { error: '禁止访问' });
+    if (filePath !== resolve(staticDir) && !filePath.startsWith(`${resolve(staticDir)}${sep}`)) return json(response, 403, { error: '禁止访问' });
     if (!existsSync(filePath) || statSync(filePath).isDirectory()) filePath = join(staticDir, 'index.html');
     const headers = {
       'Content-Type': MIME_TYPES[extname(filePath)] || 'application/octet-stream',
@@ -96,60 +87,45 @@ export function createAppServer({ dataDir, staticDir, maxUploadBytes = 800 * 102
         database.prepare('SELECT 1').get();
         return json(response, 200, { status: 'ok', storage: 'sqlite' });
       }
+      if (url.pathname.startsWith('/api/')) {
+        const body = async () => {
+          if (!request.headers['content-type']?.includes('application/json')) throw Object.assign(new Error('须使用 JSON 请求'), { statusCode: 415 });
+          const value = JSON.parse((await readBody(request, url.pathname === '/api/state' ? 64 * 1024 * 1024 : 1024 * 1024)).toString('utf8'));
+          if (!value || typeof value !== 'object' || Array.isArray(value)) throw Object.assign(new Error('请求格式无效'), { statusCode: 400 });
+          return value;
+        };
+        if (await access.handle(request, response, url, body, json)) return;
+      }
       if (request.method === 'GET' && url.pathname === '/api/state') {
-        const state = getState.get();
-        if (!state) return response.writeHead(204, { 'Cache-Control': 'no-store' }).end();
-        return json(response, 200, {
-          revision: state.revision,
-          updatedAt: state.updated_at,
-          snapshot: JSON.parse(state.payload),
-          blobs: getBlobMetadata.all(),
-        });
+        return json(response, 200, access.getState(access.actor(request)));
       }
       if (request.method === 'PUT' && url.pathname === '/api/state') {
+        if (!request.headers['content-type']?.includes('application/json')) return json(response, 415, { error: '须使用 JSON 请求' });
         const body = JSON.parse((await readBody(request, 64 * 1024 * 1024)).toString('utf8'));
-        const current = getState.get();
-        const currentRevision = current?.revision ?? 0;
-        if (body.baseRevision !== currentRevision) return json(response, 409, { error: '服务器数据已更新，请刷新后重试', revision: currentRevision });
-        if (!validateSnapshot(body.snapshot) || !Array.isArray(body.blobIds) || !body.blobIds.every(id => typeof id === 'string')) {
-          return json(response, 400, { error: '数据格式无效' });
-        }
-        const missing = body.blobIds.filter(id => !getBlob.get(id));
-        if (missing.length) return json(response, 400, { error: '存在尚未上传的附件', missing });
-        const nextRevision = currentRevision + 1;
-        const updatedAt = new Date().toISOString();
-        database.exec('BEGIN IMMEDIATE');
-        try {
-          if (body.blobIds.length) {
-            const placeholders = body.blobIds.map(() => '?').join(',');
-            database.prepare(`DELETE FROM file_blobs WHERE id NOT IN (${placeholders})`).run(...body.blobIds);
-          } else database.exec('DELETE FROM file_blobs');
-          putState.run(nextRevision, JSON.stringify(body.snapshot), updatedAt);
-          database.exec('COMMIT');
-        } catch (error) {
-          database.exec('ROLLBACK');
-          throw error;
-        }
-        return json(response, 200, { revision: nextRevision, updatedAt });
+        if (!body || typeof body !== 'object' || Array.isArray(body)) return json(response, 400, { error: '请求格式无效' });
+        return json(response, 200, access.putState(access.actor(request), body));
       }
       const blobMatch = url.pathname.match(/^\/api\/blobs\/([A-Za-z0-9_-]+)$/);
       if (blobMatch && request.method === 'PUT') {
+        access.blobAllowed(access.actor(request), blobMatch[1], true);
         const data = await readBody(request, maxUploadBytes);
         const type = String(request.headers['content-type'] || 'application/octet-stream').slice(0, 255);
         putBlob.run(blobMatch[1], type, data.length, data, new Date().toISOString());
         return json(response, 200, { id: blobMatch[1], size: data.length });
       }
       if (blobMatch && request.method === 'GET') {
+        if (!access.blobAllowed(access.actor(request), blobMatch[1])) return json(response, 403, { error: '无权访问附件' });
         const blob = getBlob.get(blobMatch[1]);
         if (!blob) return json(response, 404, { error: '附件不存在' });
-        response.writeHead(200, { 'Content-Type': blob.mime_type, 'Content-Length': blob.size, 'Cache-Control': 'private, max-age=3600' });
+        response.writeHead(200, { 'Content-Type': blob.mime_type, 'Content-Length': blob.size, 'Cache-Control': 'no-store', 'Content-Disposition': 'attachment', 'X-Content-Type-Options': 'nosniff' });
         return response.end(blob.data);
       }
+      if (url.pathname.startsWith('/api/')) return json(response, 404, { error: '接口不存在' });
       if (request.method === 'GET' || request.method === 'HEAD') return serveStatic(request, response, url.pathname);
       return json(response, 404, { error: '接口不存在' });
     } catch (error) {
       const status = error?.statusCode || (error instanceof SyntaxError ? 400 : 500);
-      console.error(error);
+      if (status >= 500) console.error(error);
       return json(response, status, { error: status === 500 ? '服务器内部错误' : error.message });
     }
   });

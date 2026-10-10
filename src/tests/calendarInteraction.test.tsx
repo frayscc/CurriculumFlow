@@ -10,6 +10,7 @@ import { db } from '../db/schema';
 import { createProject } from '../db/repositories/projects';
 import { createTask } from '../db/repositories/tasks';
 import { moveTask, resizeTask } from '../db/repositories/manualSchedule';
+import { setAuth } from '../auth';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root;
@@ -19,7 +20,7 @@ beforeEach(async () => {
   container = document.createElement('div'); document.body.append(container);
   root = createRoot(container);
 });
-afterEach(async () => { await act(async () => root.unmount()); container.remove(); await db.delete(); });
+afterEach(async () => { await act(async () => root.unmount()); container.remove(); await db.delete(); setAuth(undefined); });
 
 async function fixture(page: 'calendar' | 'export' = 'calendar', endDate = '2026-09-18') {
   const project = await createProject({ schoolYear: '2026-2027', grade: '测试', subject: '物理', semester: '第一学期', startDate: '2026-09-01', endDate });
@@ -42,6 +43,21 @@ function pointer(type: string, x: number, y: number) {
   Object.assign(event, { pointerId: 1, button: 0, clientX: x, clientY: y });
   return event;
 }
+
+it('shows the full calendar to a read-only teacher without mutation controls or shortcuts', async () => {
+  const { project, a } = await fixture();
+  await db.projects.update(project.id, { ownerId: 'another', groupId: 'g' });
+  setAuth({ initialized: true, groups: [], user: { id: 'reader', username: 'reader', name: 'Reader', role: 'teacher', teacherId: 't', disabled: false, memberships: [{ groupId: 'g', leader: false }] } });
+  await act(async () => root.render(<MemoryRouter initialEntries={[`/projects/${project.id}/calendar`]}><Routes><Route path="/projects/:projectId/calendar" element={<CalendarPage />} /></Routes></MemoryRouter>));
+  await vi.waitFor(() => expect(container.textContent).toContain('只读月历'));
+  expect(container.querySelector('.term-calendar-grid')).not.toBeNull();
+  expect(container.querySelector('.resize-handle')).toBeNull();
+  expect(container.querySelector('.quick-task-form')).toBeNull();
+  await act(async () => (day('1') as HTMLElement).click());
+  await act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key: '2', bubbles: true })));
+  expect((await db.calendarDays.get([project.id, '2026-09-01']))?.dayType).toBe('normal');
+  expect((await db.teachingTasks.get(a.id))?.scheduledStartDate).toBe('2026-09-01');
+});
 
 it('resizes with pointer movement across a weekend and shifts later content', async () => {
   const { a, b } = await fixture();

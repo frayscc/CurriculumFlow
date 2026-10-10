@@ -2,6 +2,7 @@ import { generateCalendarDays, teachingWeekNumber } from '../../core/calendar/da
 import type { SemesterProject, TeachingTask } from '../../types/domain';
 import { db as appDb } from '../schema';
 import { defaultWeeklyProgressSlots, validateProjectInput, type ProjectInput } from './projects';
+import { canEditProject, projectOwnership } from '../../auth';
 
 export interface CopyOptions {
   tasks: boolean; plannedPeriods: boolean; examNodes: boolean; selfStudy: boolean;
@@ -19,12 +20,12 @@ export async function copyHistoricalProject(
   return database.transaction('rw', [database.projects, database.calendarDays, database.courseSchedules, database.teachingTasks, database.exams], async () => {
     const source = await database.projects.get(sourceProjectId);
     if (!source) throw new Error('往届项目不存在。');
-    const existing = await database.projects.where('[schoolYear+grade+subject+semester]').equals([data.schoolYear, data.grade, data.subject, data.semester]).first();
+    const existing = await database.projects.where('[schoolYear+grade+subject+semester]').equals([data.schoolYear, data.grade, data.subject, data.semester]).filter(project => !project.archived).first();
     if (existing) throw new Error('同一学年、年级、学科和学期的项目已存在。');
     const id = crypto.randomUUID();
     const timestamp = new Date().toISOString();
     const project: SemesterProject = {
-      ...data, id, sourceProjectId, weekStart: source.weekStart ?? 7,
+      ...data, ...projectOwnership(data), id, sourceProjectId, weekStart: source.weekStart ?? 7,
       sharedCourseSlots: options.courseSchedule ? (source.sharedCourseSlots ?? []).map(group => ({ ...group, id: crypto.randomUUID() })) : [],
       weeklyProgressSlots: options.courseSchedule ? (source.weeklyProgressSlots ?? defaultWeeklyProgressSlots()).map(slot => ({ ...slot, id: crypto.randomUUID(), weekdays: [...slot.weekdays] })) : defaultWeeklyProgressSlots(),
       createdAt: timestamp, updatedAt: timestamp,
@@ -51,7 +52,7 @@ export async function copyHistoricalProject(
       const oldTasks = await database.teachingTasks.where('projectId').equals(sourceProjectId).sortBy('order');
       const selected = oldTasks.filter(task => (options.examNodes || task.type !== 'exam' && task.type !== 'quiz') &&
         (options.selfStudy || task.type !== 'self_study'));
-      const oldExams = options.examNodes ? await database.exams.where('projectId').equals(sourceProjectId).toArray() : [];
+      const oldExams = options.examNodes && canEditProject(project, true) ? await database.exams.where('projectId').equals(sourceProjectId).toArray() : [];
       const examIdMap = new Map<string, string>();
       const newExams = oldExams.map(exam => {
         const newId = crypto.randomUUID(); examIdMap.set(exam.id, newId);

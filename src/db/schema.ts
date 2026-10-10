@@ -64,4 +64,8 @@ export class CurriculumDatabase extends Dexie {
   }
 }
 
-export const db = new CurriculumDatabase();
+export let db = new CurriculumDatabase();
+export function selectAccountDatabase(userId: string) {
+  db.close();
+  db = new CurriculumDatabase(`CurriculumFlow-account-${userId}`);
+}

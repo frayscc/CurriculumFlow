@@ -2,8 +2,10 @@ import JSZip from 'jszip';
 import { BACKUP_SCHEMA_VERSION, backupTables, sha256, validateManifest, type BackupData, type BackupManifest } from '../../core/backup/format';
 import type { SemesterProject } from '../../types/domain';
 import { db as appDb } from '../schema';
+import { getAuth, projectOwnership } from '../../auth';
+import { fileContent } from '../fileContent';
 
-const appVersion = '1.5.6';
+const appVersion = '1.6.0';
 const maxZipBytes = 750 * 1024 * 1024;
 
 export async function exportProjectBackup(projectId: string, database = appDb): Promise<{ blob: Blob; filename: string }> {
@@ -31,7 +33,7 @@ export async function exportProjectBackup(projectId: string, database = appDb): 
   const zip = new JSZip();
   const files: BackupManifest['files'] = [];
   for (const metadata of data.examFiles) {
-    const record = await database.fileBlobs.get(metadata.blobId);
+    const record = await fileContent(metadata.blobId, database);
     if (!record) throw new Error(`附件 ${metadata.originalFileName} 缺少文件内容。`);
     const bytes = new Uint8Array(await record.blob.arrayBuffer());
     if (bytes.byteLength !== metadata.size) throw new Error(`附件 ${metadata.originalFileName} 大小不一致。`);
@@ -68,6 +70,7 @@ export async function prepareProjectBackup(file: Blob): Promise<PreparedBackup> 
 }
 
 export async function restoreProjectBackup(prepared: PreparedBackup, database = appDb): Promise<SemesterProject> {
+  if (getAuth() && getAuth()?.user?.role !== 'admin') throw new Error('多人版仅管理员可恢复完整备份。');
   const { manifest, blobs } = prepared;
   validateManifest(manifest);
   const data = manifest.data;
@@ -78,22 +81,32 @@ export async function restoreProjectBackup(prepared: PreparedBackup, database = 
   }
   const newProjectId = crypto.randomUUID();
   const remap = new Map<string, string>([[data.project.id, newProjectId]]);
-  for (const table of ['teachingTasks', 'planVersions', 'scheduledLessons', 'actualRecords', 'changeLogs', 'planAnnotations', 'specialDuties', 'exams', 'examFiles', 'teachers'] as const) {
+  const existingTeachers = await database.teachers.toArray();
+  const reusedTeachers = new Set<string>();
+  for (const teacher of data.teachers) {
+    const existing = existingTeachers.find(row => row.id === teacher.id)
+      ?? (teacher.userId ? existingTeachers.find(row => row.userId === teacher.userId) : undefined)
+      ?? existingTeachers.find(row => row.userId && row.name === teacher.name);
+    remap.set(teacher.id, existing?.id ?? crypto.randomUUID());
+    if (existing) reusedTeachers.add(teacher.id);
+  }
+  for (const table of ['teachingTasks', 'planVersions', 'scheduledLessons', 'actualRecords', 'changeLogs', 'planAnnotations', 'specialDuties', 'exams', 'examFiles'] as const) {
     for (const row of data[table]) remap.set(row.id, crypto.randomUUID());
   }
   for (const file of manifest.files) remap.set(file.blobId, crypto.randomUUID());
   const id = (old?: string) => old ? remap.get(old) ?? old : undefined;
   const now = new Date().toISOString();
-  const project: SemesterProject = { ...data.project, id: newProjectId, sourceProjectId: undefined, createdAt: now, updatedAt: now };
+  const project: SemesterProject = { ...data.project, ...projectOwnership(data.project), archived: undefined, id: newProjectId, sourceProjectId: undefined, createdAt: now, updatedAt: now };
   await database.transaction('rw', [database.projects, ...backupTables.map(table => database[table]), database.fileBlobs], async () => {
-    const duplicate = await database.projects.where('[schoolYear+grade+subject+semester]').equals([project.schoolYear, project.grade, project.subject, project.semester]).first();
+    const duplicate = await database.projects.where('[schoolYear+grade+subject+semester]').equals([project.schoolYear, project.grade, project.subject, project.semester]).filter(project => !project.archived).first();
     if (duplicate) throw new Error('相同学年、年级、学科和学期的项目已存在。请先调整现有项目或备份内容。');
     await database.projects.add(project);
     await database.calendarDays.bulkAdd(data.calendarDays.map(row => ({ ...row, projectId: newProjectId })));
     await database.courseSchedules.bulkAdd(data.courseSchedules.map(row => ({ ...row, projectId: newProjectId })));
     await database.scheduleOverrides.bulkAdd(data.scheduleOverrides.map(row => ({ ...row, projectId: newProjectId })));
-    await database.teachers.bulkPut(data.teachers.map(row => ({ ...row, id: id(row.id)! })));
-    await database.exams.bulkAdd(data.exams.map(row => ({ ...row, id: id(row.id)!, projectId: newProjectId, authorIds: row.authorIds.map(value => id(value)!), reviewerIds: row.reviewerIds.map(value => id(value)!) })));
+    await database.teachers.bulkPut(data.teachers.filter(row => !reusedTeachers.has(row.id)).map(row => ({ ...row, id: id(row.id)!, userId: undefined })));
+    const teacherName = (oldId: string, fallback: string) => existingTeachers.find(row => row.id === id(oldId))?.name ?? fallback;
+    await database.exams.bulkAdd(data.exams.map(row => ({ ...row, id: id(row.id)!, projectId: newProjectId, authorIds: row.authorIds.map(value => id(value)!), reviewerIds: row.reviewerIds.map(value => id(value)!), authorNames: row.authorIds.map((value, index) => teacherName(value, row.authorNames[index])), reviewerNames: row.reviewerIds.map((value, index) => teacherName(value, row.reviewerNames[index])) })));
     await database.teachingTasks.bulkAdd(data.teachingTasks.map(row => ({ ...row, id: id(row.id)!, projectId: newProjectId, examId: id(row.examId) })));
     await database.planVersions.bulkAdd(data.planVersions.map(row => ({ ...row, id: id(row.id)!, projectId: newProjectId, scheduleSnapshot: row.scheduleSnapshot.map(lesson => ({ ...lesson, id: id(lesson.id)!, taskId: id(lesson.taskId)! })) })));
     await database.scheduledLessons.bulkAdd(data.scheduledLessons.map(row => ({ ...row, id: id(row.id)!, projectId: newProjectId, taskId: id(row.taskId)!, planVersionId: id(row.planVersionId)! })));

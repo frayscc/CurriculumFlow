@@ -61,14 +61,29 @@ it('uploads pending local changes when reopening against the same server revisio
   expect((tables.projects[0] as { subject: string }).subject).toBe('未同步修改');
   expect(client.getSyncStatus().state).toBe('synced');
 });
-it('preserves pending edits when reopening against a changed server', async () => {
+it('attempts a baseline merge when reopening against a changed server, preserving edits on rejection', async () => {
   await client.initializeServerSync();
   await database.projects.update('p1', { subject: '本地修改' });
   tables.projects.push({ id: 'p2' }); revision++;
   await client.initializeServerSync();
   expect(client.getSyncStatus().state).toBe('conflict');
   expect((await database.projects.get('p1'))?.subject).toBe('本地修改');
-  expect(writes).toBe(0);
+  expect(writes).toBe(1);
+});
+
+it('checks only the revision when the local and remote states are unchanged', async () => {
+  await client.initializeServerSync();
+  vi.mocked(fetch).mockClear();
+  await client.syncNow();
+  expect(fetch).toHaveBeenCalledTimes(1);
+  expect(vi.mocked(fetch).mock.calls[0][0]).toBe('/api/state/revision');
+});
+
+it('imports attachment metadata without eagerly downloading file contents', async () => {
+  vi.mocked(fetch).mockImplementation(async () => new Response(JSON.stringify({ revision, snapshot: { schemaVersion: 1, tables }, blobs: [{ id: 'large-paper', type: 'application/pdf', size: 10000000 }] }), { headers: { 'Content-Type': 'application/json' } }));
+  await client.initializeServerSync();
+  expect(fetch).toHaveBeenCalledTimes(1);
+  expect(await database.fileBlobs.count()).toBe(0);
 });
 it('pulls remote edits when the local snapshot is clean', async () => {
   await client.initializeServerSync();

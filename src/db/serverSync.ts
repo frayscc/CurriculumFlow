@@ -1,4 +1,15 @@
 import { CurriculumDatabase, db } from './schema';
+import { getAuth } from '../auth';
+import { fileContent } from './fileContent';
+
+async function serverFetch(input: RequestInfo | URL, init?: RequestInit) {
+  const response = await fetch(input, init);
+  if (response.status === 401 && getAuth()) {
+    window.location.reload();
+    throw new Error('登录已过期，请重新登录；本地未同步修改仍保留在本账号缓存中。');
+  }
+  return response;
+}
 
 const syncedTableNames = [
   'projects', 'calendarDays', 'courseSchedules', 'scheduleOverrides', 'teachingTasks',
@@ -51,7 +62,7 @@ async function captureLocalState() {
   return db.transaction('r', [...syncedTableNames.map(name => db.table(name)), db.fileBlobs], async () => {
     const snapshot = await exportSnapshot();
     const blobs = await db.fileBlobs.toArray();
-    const fingerprint = `${JSON.stringify(snapshot)}\n${JSON.stringify(blobs.map(item => [item.id, item.blob.type, item.blob.size]).sort())}`;
+    const fingerprint = JSON.stringify(snapshot);
     return { snapshot, blobs, fingerprint };
   });
 }
@@ -59,7 +70,7 @@ async function captureLocalState() {
 function serverFingerprint(state: ServerState) {
   const tables: Record<string, unknown[]> = {};
   for (const name of syncedTableNames) tables[name] = stableRows(state.snapshot.tables[name] ?? []);
-  return `${JSON.stringify({ schemaVersion: 1, tables })}\n${JSON.stringify(state.blobs.map(item => [item.id, item.type, item.size]).sort())}`;
+  return JSON.stringify({ schemaVersion: 1, tables });
 }
 
 async function checkpoint(fingerprint: string) {
@@ -72,19 +83,24 @@ function conflict() {
 }
 
 async function importServerState(state: ServerState, expectedFingerprint: string) {
-  const fileBlobs = await Promise.all(state.blobs.map(async item => {
-    const response = await fetch(`/api/blobs/${encodeURIComponent(item.id)}`);
-    if (!response.ok) throw new Error(`附件 ${item.id} 下载失败`);
-    return { id: item.id, blob: await response.blob() };
-  }));
   await db.transaction('rw', db.tables, async () => {
     if ((await captureLocalState()).fingerprint !== expectedFingerprint) throw new Error('读取服务器期间本地发生了修改，已保留本地数据，请重试同步。');
-    for (const name of [...syncedTableNames, 'fileBlobs']) await db.table(name).clear();
     for (const name of syncedTableNames) {
       const rows = state.snapshot.tables[name] ?? [];
-      if (rows.length) await db.table(name).bulkAdd(rows);
+      const table = db.table(name);
+      const keyPath = table.schema.primKey.keyPath;
+      const key = (row: unknown) => {
+        const record = row as Record<string, unknown>;
+        return JSON.stringify(Array.isArray(keyPath) ? keyPath.map(part => record[part]) : record[keyPath as string]);
+      };
+      const keys = new Set(rows.map(key));
+      await table.filter(row => !keys.has(key(row))).delete();
+      const old = new Map((await table.toArray()).map(row => [key(row), JSON.stringify(row)]));
+      const changed = rows.filter(row => old.get(key(row)) !== JSON.stringify(row));
+      if (changed.length) await table.bulkPut(changed);
     }
-    if (fileBlobs.length) await db.fileBlobs.bulkAdd(fileBlobs);
+    const ids = new Set(state.blobs.map(item => item.id));
+    await db.fileBlobs.filter(item => !ids.has(item.id)).delete();
     revision = state.revision;
     await checkpoint((await captureLocalState()).fingerprint);
   });
@@ -95,7 +111,9 @@ async function importServerState(state: ServerState, expectedFingerprint: string
 async function uploadCurrentState(force = false) {
   const { snapshot, blobs: localBlobs, fingerprint: completeFingerprint } = await captureLocalState();
   if (!force && completeFingerprint === lastFingerprint) {
-    const latest = await fetch('/api/state', { cache: 'no-store' });
+    const version = await serverFetch('/api/state/revision', { cache: 'no-store' });
+    if (version.ok && (await version.json()).revision === revision) { publish('synced'); return; }
+    const latest = await serverFetch('/api/state', { cache: 'no-store' });
     if (!latest.ok) throw new Error('无法读取服务器上的最新数据');
     const state = await latest.json() as ServerState;
     if (state.revision !== revision) await importServerState(state, completeFingerprint);
@@ -105,16 +123,17 @@ async function uploadCurrentState(force = false) {
 
   publish('syncing');
   for (const item of localBlobs) {
+    if (!(snapshot.tables.examFiles as Array<{ blobId: string }>).some(file => file.blobId === item.id)) continue;
     const known = serverBlobs.get(item.id);
     if (known?.size === item.blob.size && known.type === item.blob.type) continue;
-    const response = await fetch(`/api/blobs/${encodeURIComponent(item.id)}`, {
+    const response = await serverFetch(`/api/blobs/${encodeURIComponent(item.id)}`, {
       method: 'PUT', headers: { 'Content-Type': item.blob.type || 'application/octet-stream' }, body: item.blob,
     });
     if (!response.ok) throw new Error(`附件 ${item.id} 上传失败`);
     serverBlobs.set(item.id, { type: item.blob.type || 'application/octet-stream', size: item.blob.size });
   }
 
-  const response = await fetch('/api/state', {
+  const response = await serverFetch('/api/state', {
     method: 'PUT', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ baseRevision: revision, snapshot, blobIds: localBlobs.map(item => item.id) }),
   });
@@ -126,6 +145,15 @@ async function uploadCurrentState(force = false) {
   const result = await response.json();
   revision = result.revision;
   await checkpoint(completeFingerprint);
+  // The server may have merged another group's changes or assigned a group to
+  // a newly created admin project. Refresh only if no edit happened in flight.
+  if ((await captureLocalState()).fingerprint === completeFingerprint) {
+    const latest = await serverFetch('/api/state', { cache: 'no-store' });
+    if (latest.ok) {
+      const state = await latest.json() as ServerState;
+      if (serverFingerprint(state) !== completeFingerprint) await importServerState(state, completeFingerprint);
+    }
+  }
   publish('synced');
 }
 
@@ -155,10 +183,10 @@ async function connectServerSync() {
   }
   publish('connecting');
   try {
-    const response = await fetch('/api/state', { headers: { Accept: 'application/json' } });
+    const response = await serverFetch('/api/state', { headers: { Accept: 'application/json' } });
     if (response.status === 404 || (response.ok && response.status !== 204 && !response.headers.get('content-type')?.includes('application/json'))) { enabled = false; return publish('local'); }
     const saved = (await db.syncMetadata.get('checkpoint'))?.value as Checkpoint | undefined;
-    if (saved) { revision = saved.revision; lastFingerprint = saved.fingerprint; }
+    if (saved) { revision = saved.revision; lastFingerprint = saved.fingerprint.split('\n')[0]; }
     const local = await captureLocalState();
     if (response.status === 204) {
       revision = 0;
@@ -166,9 +194,9 @@ async function connectServerSync() {
       await uploadCurrentState(true);
     } else if (response.ok) {
       const state = await response.json() as ServerState;
-      const dirty = saved ? local.fingerprint !== saved.fingerprint : local.fingerprint !== serverFingerprint(state) && (local.blobs.length > 0 || Object.values(local.snapshot.tables).some(rows => rows.length > 0));
+      const dirty = saved ? local.fingerprint !== lastFingerprint : local.fingerprint !== serverFingerprint(state) && (local.blobs.length > 0 || Object.values(local.snapshot.tables).some(rows => rows.length > 0));
       if (dirty) {
-        if (saved && state.revision === saved.revision) await uploadCurrentState();
+        if (saved) await uploadCurrentState();
         else conflict();
       } else { await importServerState(state, local.fingerprint); publish('synced'); }
     } else throw new Error(`服务器响应异常（${response.status}）`);
@@ -180,9 +208,12 @@ async function connectServerSync() {
 }
 
 export async function readServerKeepingLocalCopy() {
+  if (getAuth()?.user) {
+    for (const file of await db.examFiles.toArray()) await fileContent(file.blobId);
+  }
   const local = await captureLocalState();
   await db.syncMetadata.put({ key: `recovery:${new Date().toISOString()}`, value: local });
-  const response = await fetch('/api/state', { cache: 'no-store' });
+  const response = await serverFetch('/api/state', { cache: 'no-store' });
   if (!response.ok) throw new Error('读取服务器失败，本地副本已保留。');
   await importServerState(await response.json() as ServerState, local.fingerprint);
   initialized = true;
@@ -191,6 +222,9 @@ export async function readServerKeepingLocalCopy() {
 
 export async function buildLocalRecovery(key?: string) {
   const { default: JSZip } = await import('jszip');
+  if (!key && getAuth()?.user) {
+    for (const file of await db.examFiles.toArray()) await fileContent(file.blobId);
+  }
   const local = key ? (await db.syncMetadata.get(key))?.value as Awaited<ReturnType<typeof captureLocalState>> | undefined : await captureLocalState();
   if (!local) throw new Error('本地副本不存在。');
   const zip = new JSZip();

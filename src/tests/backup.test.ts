@@ -46,6 +46,19 @@ describe('complete project backup', () => {
     expect((await database.actualRecords.where('projectId').equals(restored.id).first())!.scheduledLessonId).toBe(restoredLesson.id);
   });
 
+  it('reuses account-bound teacher identities when restoring a project', async () => {
+    const project = await createProject(input, database);
+    await database.teachers.add({ id: 'bound-teacher', name: '甲老师', userId: 'teacher-account' });
+    await createExam(project.id, { title: '检测', examType: 'quiz', authorNames: ['甲老师'], reviewerNames: [] }, database);
+    const prepared = await prepareProjectBackup((await exportProjectBackup(project.id, database)).blob);
+    await deleteProject(project.id, database);
+    const restored = await restoreProjectBackup(prepared, database);
+    const exam = await database.exams.where('projectId').equals(restored.id).first();
+    expect(exam?.authorIds).toEqual(['bound-teacher']);
+    expect((await database.teachers.get('bound-teacher'))?.userId).toBe('teacher-account');
+    expect(await database.teachers.count()).toBe(1);
+  });
+
   it('rejects altered attachment and leaves the database unchanged', async () => {
     const project = await createProject(input, database);
     const exam = await createExam(project.id, { title: '检测', examType: 'quiz', authorNames: [], reviewerNames: [] }, database);

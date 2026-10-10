@@ -2,6 +2,7 @@ import { generateCalendarDays, parseLocalDate } from '../../core/calendar/dates'
 import type { SemesterProject, SharedCourseSlot, Weekday, WeeklyProgressSlot } from '../../types/domain';
 import { db as appDb, type CurriculumDatabase } from '../schema';
 import { normalizeManualTimeline, timelineTables } from './manualSchedule';
+import { projectOwnership } from '../../auth';
 
 export type ProjectInput = Pick<SemesterProject, 'schoolYear' | 'grade' | 'subject' | 'semester' | 'startDate' | 'endDate'>;
 
@@ -22,7 +23,7 @@ export function validateProjectInput(input: ProjectInput): ProjectInput {
 
 async function ensureUnique(input: ProjectInput, database: CurriculumDatabase, excludeId?: string) {
   const match = await database.projects.where('[schoolYear+grade+subject+semester]')
-    .equals([input.schoolYear, input.grade, input.subject, input.semester]).first();
+    .equals([input.schoolYear, input.grade, input.subject, input.semester]).filter(project => !project.archived).first();
   if (match && match.id !== excludeId) throw new Error('同一学年、年级、学科和学期的项目已存在。');
 }
 
@@ -31,7 +32,7 @@ export async function createProject(input: ProjectInput, database = appDb): Prom
   const id = crypto.randomUUID();
   const calendarDays = generateCalendarDays(id, data.startDate, data.endDate);
   const now = new Date().toISOString();
-  const project: SemesterProject = { ...data, id, weekStart: 7, sharedCourseSlots: [], weeklyProgressSlots: defaultWeeklyProgressSlots(), createdAt: now, updatedAt: now };
+  const project: SemesterProject = { ...data, ...projectOwnership(data), id, weekStart: 7, sharedCourseSlots: [], weeklyProgressSlots: defaultWeeklyProgressSlots(), createdAt: now, updatedAt: now };
   await database.transaction('rw', database.projects, database.calendarDays, async () => {
     await ensureUnique(data, database);
     await database.projects.add(project);

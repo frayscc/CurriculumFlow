@@ -1,5 +1,6 @@
 import { useState, type FormEvent, type ReactNode } from 'react';
 import type { ProjectInput } from '../db/repositories/projects';
+import { getAuth } from '../auth';
 
 const empty: ProjectInput = {
   schoolYear: '', grade: '', subject: '', semester: '第一学期', startDate: '', endDate: '',
@@ -15,7 +16,8 @@ interface Props {
 }
 
 export function ProjectForm({ initial, title, submitLabel, onSubmit, onCancel, children }: Props) {
-  const [value, setValue] = useState<ProjectInput>(initial ?? empty);
+  const groups = getAuth()?.groups ?? [];
+  const [value, setValue] = useState<ProjectInput>(initial ?? { ...empty, ...(groups[0] ? { schoolYear: groups[0].schoolYear, grade: groups[0].grade, subject: groups[0].subject } : {}) });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -40,6 +42,7 @@ export function ProjectForm({ initial, title, submitLabel, onSubmit, onCancel, c
           <button type="button" className="icon-button" onClick={onCancel} aria-label="关闭">×</button>
         </div>
         <form onSubmit={submit}>
+          {!initial && groups.length > 0 && <label>选择备课组<select aria-label="项目所属备课组" value={groups.find(group => group.schoolYear === value.schoolYear && group.grade === value.grade && group.subject === value.subject)?.id ?? ''} onChange={event => { const group = groups.find(group => group.id === event.target.value); if (group) setValue({ ...value, schoolYear: group.schoolYear, grade: group.grade, subject: group.subject }); }}><option value="">按下方信息填写</option>{groups.map(group => <option key={group.id} value={group.id}>{group.schoolYear} · {group.grade}{group.subject}</option>)}</select></label>}
           <label>学年 <input value={value.schoolYear} onChange={event => set('schoolYear', event.target.value)} placeholder="2026-2027" required autoFocus /></label>
           <div className="form-grid">
             <label>年级 <input value={value.grade} onChange={event => set('grade', event.target.value)} placeholder="九年级" required /></label>

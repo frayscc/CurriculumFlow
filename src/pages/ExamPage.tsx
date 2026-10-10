@@ -7,6 +7,8 @@ import { createExam, deleteExam, deleteExamFile, updateExam, uploadExamFile, typ
 import { db } from '../db/schema';
 import { loadNamingTemplates } from '../db/repositories/settings';
 import type { Exam, ExamFile, ExamType } from '../types/domain';
+import { canEditProject } from '../auth';
+import { fileContent } from '../db/fileContent';
 
 const examTypes: Record<ExamType, string> = {
   quiz: '随堂检测', chapter_test: '单元检测', monthly_exam: '月考', midterm: '期中考试',
@@ -28,7 +30,7 @@ function PeopleField({ label, names, onChange, suggestions }: {
 function ExamEditor({ exam, projectId, onClose, onSaved }: {
   exam?: Exam; projectId: string; onClose: () => void; onSaved: (exam: Exam) => void;
 }) {
-  const teachers = useLiveQuery(() => db.teachers.toArray()) ?? [];
+  const teachers = (useLiveQuery(() => db.teachers.toArray()) ?? []).filter(person => !person.disabled);
   const [input, setInput] = useState<ExamInput>({
     title: exam?.title ?? '', examType: exam?.examType ?? 'chapter_test', examDate: exam?.examDate ?? '',
     authorNames: exam?.authorNames ?? [], reviewerNames: exam?.reviewerNames ?? [], note: exam?.note ?? '',
@@ -84,7 +86,7 @@ function ExamDetail({ projectId, examId }: { projectId: string; examId: string }
   async function download(file: ExamFile) {
     if (!project || !exam) return;
     try {
-      const content = await db.fileBlobs.get(file.blobId);
+      const content = await fileContent(file.blobId);
       if (!content) throw new Error('附件内容缺失。');
       browserFileService.saveFile(content.blob, namedExamFile(file, project, exam, await loadNamingTemplates()));
     } catch (caught) { setError(caught instanceof Error ? caught.message : '下载失败。'); }
@@ -95,7 +97,7 @@ function ExamDetail({ projectId, examId }: { projectId: string; examId: string }
     try {
       const parts = [];
       for (const metadata of files) {
-        const content = await db.fileBlobs.get(metadata.blobId);
+        const content = await fileContent(metadata.blobId);
         if (!content) throw new Error(`附件“${metadata.originalFileName}”内容缺失。`);
         parts.push({ metadata, blob: content.blob });
       }
@@ -134,5 +136,7 @@ function ExamDetail({ projectId, examId }: { projectId: string; examId: string }
 
 export function ExamPage() {
   const { projectId = '', examId } = useParams();
-  return examId ? <ExamDetail projectId={projectId} examId={examId} /> : <ExamList projectId={projectId} />;
+  const project = useLiveQuery(async () => await db.projects.get(projectId) ?? null, [projectId]);
+  if (project === null) return <main className="workspace"><Link to="/archive">← 全校试卷资源库</Link><h1>项目不存在或不属于你的备课组</h1><p>其他备课组的共享试卷可从全校资源库下载。</p></main>;
+  return <div className={canEditProject(project, true) ? '' : 'read-only-resources'}>{!canEditProject(project, true) && <p className="workspace readonly-banner">试卷资源只读，可下载；由对应备课组长和管理员维护。</p>}{examId ? <ExamDetail projectId={projectId} examId={examId} /> : <ExamList projectId={projectId} />}</div>;
 }
